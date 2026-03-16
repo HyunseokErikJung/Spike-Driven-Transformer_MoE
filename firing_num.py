@@ -4,7 +4,6 @@ import yaml
 import json
 import os
 import numpy as np
-import random as rd
 import logging
 from collections import OrderedDict
 from contextlib import suppress
@@ -31,6 +30,45 @@ from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler
 from timm.utils import ApexScaler, NativeScaler
 import model, dvs_utils
+from module.ms_conv import Top2Gating
+from timm.models.helpers import clean_state_dict
+
+
+def resume_checkpoint(
+    model, checkpoint_path, optimizer=None, loss_scaler=None, log_info=True
+):
+    """Same as train.py's resume_checkpoint: strict=False + clean_state_dict."""
+    resume_epoch = None
+    if os.path.isfile(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            if log_info:
+                _logger.info("Restoring model state from checkpoint...")
+            state_dict = clean_state_dict(checkpoint["state_dict"])
+            result = model.load_state_dict(state_dict, strict=False)
+            if log_info and (result.missing_keys or result.unexpected_keys):
+                _logger.warning(f"Missing keys:    {result.missing_keys}")
+                _logger.warning(f"Unexpected keys:  {result.unexpected_keys}")
+
+            if "epoch" in checkpoint:
+                resume_epoch = checkpoint["epoch"]
+                if "version" in checkpoint and checkpoint["version"] > 1:
+                    resume_epoch += 1
+
+            if log_info:
+                _logger.info(
+                    "Loaded checkpoint '{}' (epoch {})".format(
+                        checkpoint_path, checkpoint["epoch"]
+                    )
+                )
+        else:
+            model.load_state_dict(checkpoint)
+            if log_info:
+                _logger.info("Loaded checkpoint '{}'".format(checkpoint_path))
+        return resume_epoch
+    else:
+        _logger.error("No checkpoint found at '{}'".format(checkpoint_path))
+        raise FileNotFoundError()
 
 try:
     from apex import amp
@@ -55,7 +93,9 @@ try:
 except ImportError:
     has_wandb = False
 
-torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
+
 # The first arg parser parses out only the --config argument, this argument is used to
 # load a yaml file containing key-values that override the defaults for the main parser below
 config_parser = parser = argparse.ArgumentParser(
@@ -752,8 +792,6 @@ parser.add_argument(
     default=False,
     help="disable fast prefetcher",
 )
-
-## added for inspection
 parser.add_argument(
     "--print-moe",
     action="store_true",
@@ -793,11 +831,9 @@ parser.add_argument(
     default=False,
     help="use only the first sample in each batch (index 0)",
 )
-####
-
 parser.add_argument(
     "--output",
-    default="/scratch1/bkrhee/Spike-Driven-Transformer_MoE/output",
+    default="./output",
     type=str,
     metavar="PATH",
     help="path to output folder (default: none, current dir)",
@@ -885,6 +921,8 @@ def main():
     args.device = "cuda:1"
     args.world_size = 1
     args.rank = 0  # global rank
+    if args.output is None:
+        args.output = "./output"
     if args.distributed:
         args.device = "cuda:%d" % args.local_rank
         torch.cuda.set_device(args.local_rank)
@@ -925,10 +963,6 @@ def main():
     torch.cuda.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     random_seed(args.seed, args.rank)
-
-
-    # torch.backends.cudnn.deterministic = True
-    rd.seed(args.seed)
 
     args.dvs_mode = False
     if args.dataset in ["cifar10-dvs-tet", "cifar10-dvs"]:
@@ -1080,6 +1114,7 @@ def main():
             data_type="frame",
             frames_number=args.time_steps,
             split_by="number",
+            transform=dvs_utils.Resize(64), 
         )
         _, dataset_eval = dvs_utils.split_to_train_test_set(0.9, dataset, 10)
     elif args.dataset == "gesture":
@@ -1172,40 +1207,24 @@ def main():
             if args.local_rank == 0:
                 _logger.info("Distributing BatchNorm running means and vars")
             distribute_bn(model, args.world_size, args.dist_bn == "reduce")
-        
-        # # Run validation TWICE to check consistency
-        # for run_idx in range(2):
-        #     _logger.info(f"\n{'='*50}")
-        #     _logger.info(f"VALIDATION RUN {run_idx + 1}")
-        #     _logger.info(f"{'='*50}")
 
-        #     eval_metrics = validate(
-        #         model,
-        #         loader_eval,
-        #         validate_loss_fn,
-        #         args,
-        #         output_dir=output_dir,
-        #         amp_autocast=amp_autocast,
-        #     )
-        #     if args.local_rank == 0:
-        #         _logger.info("Run %d - top-1: %s", run_idx + 1, eval_metrics["top1"])
-        eval_metrics = validate(
-            model,
-            loader_eval,
-            validate_loss_fn,
-            args,
-            output_dir=output_dir,
-            amp_autocast=amp_autocast,
-        )
-        if args.local_rank == 0:
-            non_zero_str = json.dumps(eval_metrics["non_zero"], indent=4)
-            firing_rate_str = json.dumps(eval_metrics["firing_rate"], indent=4)
-            _logger.info("top-1: %s", eval_metrics["top1"])
-            # _logger.info("top-1:", eval_metrics["top1"])
-            _logger.info("non_zero: ")
-            _logger.info(non_zero_str)
-            _logger.info("firing_rate: ")
-            _logger.info(firing_rate_str)
+        # Run validation TWICE to check consistency
+        for run_idx in range(2):
+            _logger.info(f"\n{'='*50}")
+            _logger.info(f"VALIDATION RUN {run_idx + 1}")
+            _logger.info(f"{'='*50}")
+
+            eval_metrics = validate(
+                model,
+                loader_eval,
+                validate_loss_fn,
+                args,
+                output_dir=output_dir,
+                amp_autocast=amp_autocast,
+            )
+            if args.local_rank == 0:
+                _logger.info("Run %d - top-1: %s", run_idx + 1, eval_metrics["top1"])
+
         if model_ema is not None and not args.model_ema_force_cpu:
             if args.distributed and args.dist_bn in ("broadcast", "reduce"):
                 distribute_bn(model_ema, args.world_size, args.dist_bn == "reduce")
@@ -1221,54 +1240,34 @@ def validate(
     top1_m = AverageMeter()
     top5_m = AverageMeter()
 
-    def _time_slice(v_, t, T):
-        # must be a tensor
-        if not torch.is_tensor(v_):
-            return None
-
-        # skip scalars (ex: moe_loss_layer_*)
-        if v_.dim() == 0:
-            return None
-
-        # we only handle tensors that are time-major: [T, ...]
-        if v_.shape[0] != T:
-            return None
-
-        return v_[t]
-
-
-    def calc_non_zero_rate(s_dict, nz_dict, denom, t, T):
+    def calc_non_zero_rate(s_dict, nz_dict, idx, t):
         for k, v_ in s_dict.items():
-            v = _time_slice(v_, t, T)
-            if v is None:
-                continue
-
-            # optional: skip any routing indices if you add them later
-            # if "routing_indices" in k:
-            #     continue
-
-            numel = v.numel()
-            if numel == 0:
-                continue
-            nz = torch.count_nonzero(v).item()
-            nz_dict[k] = nz_dict.get(k, 0.0) + (nz / numel) / denom
+            if v_.dim() < 1 or t >= v_.shape[0]:
+                continue  # skip scalars (e.g. moe_loss) and short timesteps
+            v = v_[t, ...]
+            x_shape = torch.tensor(list(v.shape))
+            all_neural = torch.prod(x_shape)
+            z = torch.nonzero(v)
+            if k in nz_dict.keys():
+                nz_dict[k] += (z.shape[0] / all_neural).item() / idx
+            else:
+                nz_dict[k] = (z.shape[0] / all_neural).item() / idx
         return nz_dict
 
-
-    def calc_firing_rate(s_dict, fr_dict, denom, t, T):
+    def calc_firing_rate(s_dict, fr_dict, idx, t):
         for k, v_ in s_dict.items():
-            v = _time_slice(v_, t, T)
-            if v is None:
-                continue
-
-            fr_dict[k] = fr_dict.get(k, 0.0) + v.mean().item() / denom
+            if v_.dim() < 1 or t >= v_.shape[0]:
+                continue  # skip scalars (e.g. moe_loss) and short timesteps
+            v = v_[t, ...]
+            if k in fr_dict.keys():
+                fr_dict[k] += v.mean().item() / idx
+            else:
+                fr_dict[k] = v.mean().item() / idx
         return fr_dict
 
     def log_moe_routing(batch_idx):
         # Local import to avoid NameError if module import is stripped in some environments
         from module.ms_conv import Top2Gating
-
-        
         if not args.print_moe or args.local_rank != 0:
             return
         if args.print_moe_batches is not None and batch_idx >= args.print_moe_batches:
@@ -1311,96 +1310,98 @@ def validate(
                             f"[batch {batch_idx}] {name} token b{b} n{n} topk={topk} probs={probs[b, n].tolist()}"
                         )
 
-
-    # def calc_non_zero_rate(s_dict, nz_dict, idx, t):
-    #     for k, v_ in s_dict.items():
-    #         v = v_[t, ...]
-    #         x_shape = torch.tensor(list(v.shape))
-    #         all_neural = torch.prod(x_shape)
-    #         z = torch.nonzero(v)
-    #         if k in nz_dict.keys():
-    #             nz_dict[k] += (z.shape[0] / all_neural).item() / idx
-    #         else:
-    #             nz_dict[k] = (z.shape[0] / all_neural).item() / idx
-    #     return nz_dict
-
-    # def calc_firing_rate(s_dict, fr_dict, idx, t):
-    #     for k, v_ in s_dict.items():
-    #         v = v_[t, ...]
-    #         if k in fr_dict.keys():
-    #             fr_dict[k] += v.mean().item() / idx
-    #         else:
-    #             fr_dict[k] = v.mean().item() / idx
-    #     return fr_dict
-
     model.eval()
-    # functional.reset_net(model)
-    
+
+    # ── Per-expert firing rate hooks ─────────────────────────────────────────
+    # The model's internal hook dict assigns the same key to every expert
+    # (all default to layer=0), so only the last expert's spikes survive.
+    # register_forward_hook gives each expert a unique path-based key:
+    #   "block{b}_expert{e}_{sublayer}"  e.g. "block0_expert2_fc1_lif"
+    _captured_expert = {}
+
+    def _make_expert_hook(label):
+        def _hook(module, inp, out):
+            _captured_expert[label] = out.detach()
+        return _hook
+
+    _expert_hook_handles = []
+    for _name, _module in model.named_modules():
+        if 'mlp.experts.' not in _name:
+            continue
+        if not (_name.endswith('fc1_lif') or _name.endswith('fc2_lif')):
+            continue
+        # Works for both plain ("block.0.mlp.experts.2.fc1_lif")
+        # and DDP-wrapped ("module.block.0.mlp.experts.2.fc1_lif") names.
+        _parts = _name.split('.')
+        _label = f"block{_parts[-5]}_expert{_parts[-2]}_{_parts[-1]}"
+        _expert_hook_handles.append(
+            _module.register_forward_hook(_make_expert_hook(_label))
+        )
+    # ─────────────────────────────────────────────────────────────────────────
+
     end = time.time()
-    
-    #### removed last_idx for now
-    # last_idx = len(loader) - 1
-    ## added this
     max_batches = args.max_batches
     if max_batches is None:
         last_idx = len(loader) - 1
     else:
         last_idx = min(len(loader), max_batches) - 1
-
     
-    fr_dict, nz_dict = {"t0": dict(), "t1": dict(), "t2": dict(), "t3": dict()}, {
-        "t0": dict(),
-        "t1": dict(),
-        "t2": dict(),
-        "t3": dict(),
-    }
+    fr_dict = {f"t{t}": dict() for t in range(args.time_steps)}
+    nz_dict = {f"t{t}": dict() for t in range(args.time_steps)}
+    # fr_dict, nz_dict = {"t0": dict(), "t1": dict(), "t2": dict(), "t3": dict()}, {
+    #     "t0": dict(),
+    #     "t1": dict(),
+    #     "t2": dict(),
+    #     "t3": dict(),
+    # }
     with torch.no_grad():
         for batch_idx, (input, target) in enumerate(loader):
-            ##
             if max_batches is not None and batch_idx >= max_batches:
                 break
-            denom= len(loader)
-
+            functional.reset_net(model)  # Reset neuron states BEFORE each batch
             last_batch = batch_idx == last_idx
             # input = input.float()  # Ensure float32 like train.py
-            if not args.prefetcher:
-                input = input.cuda()
-            target = target.cuda()
+            ## modified for dvs gesture
+            input = input.float()
+            if not args.prefetcher or args.dataset in dvs_utils.DVS_DATASET:
+                if args.amp and not isinstance(input, torch.cuda.HalfTensor):
+                    input = input.half()
+                input, target = input.cuda(), target.cuda()
+            else:
+                target = target.cuda()
             if args.channels_last:
                 input = input.contiguous(memory_format=torch.channels_last)
-
-            ######
             if args.first_sample_only:
                 input = input[:1]
                 target = target[:1]
 
             with amp_autocast():
                 output, firing_dict = model(input, hook=dict())
+                firing_dict.update(_captured_expert)  # merge per-expert spikes
                 if args.save_qkv and args.local_rank == 0:
                     torch.save(
                         firing_dict, os.path.join(output_dir, f"qkv_{batch_idx}.pkl")
                     )
-
-                ###
                 log_moe_routing(batch_idx)
 
             for t in range(args.time_steps):
-                # fr_single_dict = calc_firing_rate(
-                #     firing_dict, fr_dict["t" + str(t)], last_idx, t
-                # )
-                fr_dict[f"t{t}"] = calc_firing_rate(firing_dict, fr_dict[f"t{t}"], denom, t, args.time_steps)
-                # fr_dict["t" + str(t)] = fr_single_dict
-                # nz_single_dict = calc_non_zero_rate(
-                #     firing_dict, nz_dict["t" + str(t)], last_idx, t
-                # )
-                nz_dict[f"t{t}"] = calc_non_zero_rate(firing_dict, nz_dict[f"t{t}"], denom, t, args.time_steps)
-                #nz_dict["t" + str(t)] = nz_single_dict
+                fr_single_dict = calc_firing_rate(
+                    firing_dict, fr_dict["t" + str(t)], last_idx, t
+                )
+                fr_dict["t" + str(t)] = fr_single_dict
+                nz_single_dict = calc_non_zero_rate(
+                    firing_dict, nz_dict["t" + str(t)], last_idx, t
+                )
+                nz_dict["t" + str(t)] = nz_single_dict
 
             # augmentation reduction
             reduce_factor = args.tta
             if reduce_factor > 1:
                 output = output.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
                 target = target[0 : target.size(0) : reduce_factor]
+            
+            if args.TET:
+                output = output.mean(0)
 
             loss = loss_fn(output, target)
             functional.reset_net(model)
@@ -1441,6 +1442,28 @@ def validate(
                         top5=top5_m,
                     )
                 )
+
+    for _h in _expert_hook_handles:
+        _h.remove()
+
+    # Print firing rates per timestep: other layers first, then per-expert
+    if args.local_rank == 0:
+        _other_keys = sorted(k for k in fr_dict["t0"] if "_expert" not in k)
+        _expert_keys = sorted(k for k in fr_dict["t0"] if "_expert" in k)
+
+        _logger.info("=== Layer Firing Rates (averaged over dataset) ===")
+        for t in range(args.time_steps):
+            _logger.info("  [t=%d]", t)
+            for _key in _other_keys:
+                _rate = fr_dict[f"t{t}"].get(_key, float("nan"))
+                _logger.info("    %s: %.4f", _key, _rate)
+
+        _logger.info("=== Per-Expert Firing Rates (averaged over dataset) ===")
+        for t in range(args.time_steps):
+            _logger.info("  [t=%d]", t)
+            for _key in _expert_keys:
+                _rate = fr_dict[f"t{t}"].get(_key, float("nan"))
+                _logger.info("    %s: %.4f", _key, _rate)
 
     metrics = OrderedDict(
         [

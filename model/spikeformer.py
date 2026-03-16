@@ -41,6 +41,8 @@ class SpikeDrivenTransformer(nn.Module):
         cml=False,
         pretrained=False,
         pretrained_cfg=None,
+        pretrained_cfg_overlay=None,
+        cache_dir=None,
     ):
         super().__init__()
         self.num_classes = num_classes

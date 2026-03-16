@@ -1,9 +1,9 @@
 # Dataset / Model parameters
-# data_dir: ./data/
+data_dir: /dataset/CIFAR100
 dataset: torch/cifar100
 pretrained: False
 num_classes: 100
-num_heads: 8
+num_heads: 12
 img_size: 32
 mean:
     - 0.5071
@@ -20,12 +20,12 @@ scale:
 ratio: [1.0, 1.0]
 interpolation: bicubic
 train_interpolation: bicubic
-use_conv_as_linear: true
+# use_conv_as_linear: true
 pooling_stat: "0011"
 time_steps: 4
-layer: 2
-dim: 512
-mlp-ratio: 4
+layer: 4
+dim: 384
+mlp_ratio: 4
 
 # Augmentation & regularization parameters
 aa: rand-m9-n1-mstd0.4-inc1
@@ -43,15 +43,15 @@ model-ema-decay: 0.9998
 
 # Misc
 seed: 42
-amp: False
-channels-last: False
-batch_size: 32
-val_batch_size: 32
-lr: 5e-4 # 5e-4
+amp: False  # True triggers CuDNN "no valid convolution algorithms" on backward with this model
+channels_last: False
+batch_size: 128
+val_batch_size: 128
+lr: 1e-3
 min_lr: 1e-5
 sched: cosine
 weight_decay: 6e-2
-epochs: 200 # 100, 300
+epochs: 300
 cooldown_epochs: 10
 warmup_epochs: 20
 warmup_lr: 1e-6

@@ -377,19 +377,19 @@ class Top2Gating(nn.Module):
         # Initialized small (std=0.02 from _init_weights) so router starts ≈ pure linear.
         # self.gate_spatial = nn.Conv2d(dim, dim, kernel_size=3, padding=1, bias=False, groups=dim)
         # Linear router: per-token projection to expert logits
-        # self.w_gating = nn.Parameter(torch.randn(dim, num_gates))
+        self.w_gating = nn.Parameter(torch.randn(dim, num_gates))
 
         # Two-layer router MLP: (B, N, C) -> (B, N, E) # originally 512
         router_hidden = dim
-        self.w_gating = nn.Sequential(
-            nn.Linear(dim, router_hidden, bias=False),
-            GELU(),
-            nn.Linear(router_hidden, router_hidden, bias=False),
-            GELU(),
-            nn.Linear(router_hidden, router_hidden, bias=False),
-            GELU(),
-            nn.Linear(router_hidden, num_gates, bias=False)
-        )
+        # self.w_gating = nn.Sequential(
+        #     nn.Linear(dim, router_hidden, bias=False),
+        #     GELU(),
+        #     nn.Linear(router_hidden, router_hidden, bias=False),
+        #     GELU(),
+        #     nn.Linear(router_hidden, router_hidden, bias=False),
+        #     GELU(),
+        #     nn.Linear(router_hidden, num_gates, bias=False)
+        # )
         # self.gate_lif1 = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
         # self.gate_lif2 = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
         # self.gate_lif3 = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
@@ -445,8 +445,8 @@ class Top2Gating(nn.Module):
         ###########################################
         x_pooled = x_tok.mean(dim=0)  # B, N, C
 
-        # raw_gates = torch.einsum('bnc,ce->bne', x_pooled, self.w_gating)  # B, N, num_gates
-        raw_gates = self.w_gating(x_pooled)  # (B, N, E)
+        raw_gates = torch.einsum('bnc,ce->bne', x_pooled, self.w_gating)  # B, N, num_gates
+        # raw_gates = self.w_gating(x_pooled)  # (B, N, E)
         raw_gates = raw_gates.softmax(dim=-1)
 
 
@@ -656,9 +656,9 @@ class MoE(nn.Module):
         # Each expert processes a different number of timesteps: [1, 2, ..., num_experts]
         # self.expert_timesteps = list(range(1, num_experts + 1))
         # self.expert_timesteps = [4, 3, 2, 1]
-        # self.expert_timesteps = [4, 1, 1, 1]
+        self.expert_timesteps = [4, 1, 1, 1]
         # self.expert_timesteps = [4, 4, 4, 4] # baseline
-        self.expert_timesteps = [10, 10, 10, 1] # for dvsgesture
+        # self.expert_timesteps = [10, 10, 10, 1] # for dvsgesture
         # self.expert_timesteps = [1, 1, 4, 4]
         # self.expert_timesteps = [4, 4, 1, 1]
         # self.expert_timesteps = [1, 1, 1, 4]  # 3 cheap experts + 1 full-timestep expert
