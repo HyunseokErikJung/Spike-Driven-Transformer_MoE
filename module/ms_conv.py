@@ -625,7 +625,8 @@ class MoE(nn.Module):
         ##
         # top_k = 2,  
         top_k = 1,
-        experts = None):
+        experts = None,
+        expert_timesteps = None):
         super().__init__()
 
         self.num_experts = num_experts
@@ -653,10 +654,14 @@ class MoE(nn.Module):
             )
             for i in range(num_experts)
         ])
+        
         # Each expert processes a different number of timesteps: [1, 2, ..., num_experts]
         # self.expert_timesteps = list(range(1, num_experts + 1))
         # self.expert_timesteps = [4, 3, 2, 1]
-        self.expert_timesteps = [4, 1, 1, 1]
+        if expert_timesteps is None:
+            self.expert_timesteps = [4, 1, 1, 1]
+        else:
+            self.expert_timesteps = list(expert_timesteps)
         # self.expert_timesteps = [4, 4, 4, 4] # baseline
         # self.expert_timesteps = [10, 10, 10, 1] # for dvsgesture
         # self.expert_timesteps = [1, 1, 4, 4]
@@ -794,6 +799,7 @@ class MS_Block_Conv(nn.Module):
         layer=0,
         num_experts = 4,
         loss_coef=1e-2,
+        expert_timesteps = None,
 
         ##
         # top_k = 2,  
@@ -819,6 +825,9 @@ class MS_Block_Conv(nn.Module):
         self.layer = layer
 
         mlp_hidden_dim = int(dim * mlp_ratio)
+        print(f'dim: {dim}, mlp_ratio: {mlp_ratio}, num_experts: {num_experts}')
+        print(f'mlp_hidden_dim: {mlp_hidden_dim}, gogogo')
+        
 
         self.mlp = MoE(
             dim=dim,
@@ -827,6 +836,7 @@ class MS_Block_Conv(nn.Module):
             out_features=dim,
             spike_mode='lif',
             loss_coef=loss_coef,
+            expert_timesteps=expert_timesteps,
 
             ##
             top_k = top_k

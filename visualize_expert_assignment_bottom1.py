@@ -52,7 +52,9 @@ def parse_args():
     p.add_argument("--num-classes", type=int, default=1000)
     p.add_argument("--time-steps", type=int, default=4)
     p.add_argument("--num-heads", type=int, default=8)
-    p.add_argument("--mlp-ratio", type=int, default=4)
+    p.add_argument("--mlp-ratio", type=float, default=4.0)
+    p.add_argument("--num-experts", type=int, default=4)
+    p.add_argument("--expert-timesteps", default=None, help="from config: list of int. None = default.")
     p.add_argument("--img-size", type=int, default=None)
     p.add_argument("--patch-size", type=int, default=None)
     p.add_argument("--dim", type=int, default=512)
@@ -128,6 +130,8 @@ def load_model_and_checkpoint(args):
         patch_size=args.patch_size,
         embed_dims=args.dim,
         mlp_ratios=args.mlp_ratio,
+        num_experts=args.num_experts,
+        expert_timesteps=getattr(args, "expert_timesteps", None),
         in_channels=args.in_channels,
         qkv_bias=False,
         depths=args.layer,

@@ -239,10 +239,22 @@ parser.add_argument(
 )
 parser.add_argument(
     "--mlp-ratio",
+    type=float,
+    default=4.0,
+    metavar="N",
+    help="expand ratio of embedding dimension in MLP block (per-expert in MoE)",
+)
+parser.add_argument(
+    "--num-experts",
     type=int,
     default=4,
     metavar="N",
-    help="expand ration of embedding dimension in MLP block",
+    help="number of MoE experts per block",
+)
+parser.add_argument(
+    "--expert-timesteps",
+    default=None,
+    help="MoE expert timesteps per expert (from config: list of int). None = use default.",
 )
 parser.add_argument(
     "--gp",
@@ -983,6 +995,8 @@ def main():
         patch_size=args.patch_size,
         embed_dims=args.dim,
         mlp_ratios=args.mlp_ratio,
+        num_experts=args.num_experts,
+        expert_timesteps=getattr(args, "expert_timesteps", None),
         in_channels=args.in_channels,
         qkv_bias=False,
         depths=args.layer,
