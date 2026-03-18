@@ -25,8 +25,9 @@ pooling_stat: "0011"
 time_steps: 4
 layer: 2
 dim: 512
-mlp-ratio: 4
-num_experts: 4
+mlp_ratio: 0.5 #"--mlp-ratio",
+num_experts: 8 #"--num-experts",
+expert_timesteps: [4, 4, 4, 4, 4, 4, 4, 4] #"--expert-timesteps",
 
 # Augmentation & regularization parameters
 aa: rand-m9-n1-mstd0.4-inc1

@@ -500,7 +500,7 @@ class Top2Gating(nn.Module):
         positions = []
         
         gates_remaining = raw_gates.clone()
-        cumulative_mask_count = torch.zeros(B, 1, num_gates).to(raw_gates.device)  # Track capacity usage
+        cumulative_mask_count = torch.zeros(B, 1, num_gates, device=raw_gates.device)  # Track capacity usage
         
         # Find top-k experts iteratively
         for k in range(self.top_k):
