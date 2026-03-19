@@ -12,3 +12,4 @@ pretrain.py
 visual/
 visual_ft/
 visual_sct/
+.vscode/
