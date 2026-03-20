@@ -47,9 +47,9 @@ model-ema-decay: 0.9998
 seed: 42
 amp: False
 channels-last: False
-batch_size: 32
-val_batch_size: 32
-lr: 5e-4 # 5e-4
+batch_size: 128
+val_batch_size: 256
+lr: 1e-3 # 5e-4
 min_lr: 1e-5
 sched: cosine
 weight_decay: 6e-2

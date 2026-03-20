@@ -132,12 +132,13 @@ class MS_MLP_Expert(nn.Module):
         self.c_output = out_features
         self.layer = layer
         
-    def reset(self):
-        for m in self.modules():
-            if m is self:
-                continue
-            if hasattr(m, "reset"):
-                m.reset()
+    # this is not needed. functional reset_net handles this.
+    # def reset(self):
+    #     for m in self.modules():
+    #         if m is self:
+    #             continue
+    #         if hasattr(m, "reset"):
+    #             m.reset()
 
     # def forward(self, x, hook=None, shared_fc1_bn=None, shared_fc2_bn=None):
     def forward(self, x, hook=None):

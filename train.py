@@ -8,13 +8,10 @@ import random as rd
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
-from spikingjelly.clock_driven import functional
+from spikingjelly.activation_based import functional
 from spikingjelly.datasets.cifar10_dvs import CIFAR10DVS
 from spikingjelly.datasets.dvs128_gesture import DVS128Gesture
-from spikingjelly.clock_driven.neuron import (
-    MultiStepLIFNode,
-    MultiStepParametricLIFNode,
-)
+from spikingjelly.activation_based.neuron import LIFNode, ParametricLIFNode
 import torch
 import torch.nn as nn
 import torchvision.utils
@@ -36,7 +33,11 @@ from timm.models import (
     load_checkpoint,
     model_parameters,
 )
-from timm.models.helpers import clean_state_dict
+try:
+    from timm.models import clean_state_dict
+except Exception:
+    # Backward compatibility for older timm versions
+    from timm.models.helpers import clean_state_dict
 from timm.utils import *
 from timm.loss import (
     LabelSmoothingCrossEntropy,
@@ -1686,7 +1687,7 @@ def train_one_epoch(
                 expert_taus = defaultdict(lambda: defaultdict(dict))  # layer -> expert_id -> {fc1: tau, fc2: tau, fc1_grad: grad, fc2_grad: grad}
 
                 for name, module in model.named_modules():
-                    if isinstance(module, MultiStepParametricLIFNode) and '.experts.' in name:
+                    if isinstance(module, ParametricLIFNode) and '.experts.' in name:
                         # Extract layer and expert id
                         layer_match = re.search(r'block\.(\d+)\.', name)
                         expert_match = re.search(r'\.experts\.(\d+)\.', name)
