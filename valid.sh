@@ -42,8 +42,22 @@
   # --num-images 8 \
   # --output-dir ./visual --start-idx 3300 --overlay-alpha 0.7
 
-  CUDA_VISIBLE_DEVICES=7 python visualize_expert_assignment_bottom1.py \
-  -c conf/cifar100/4_384_300E_t4.yml \
-  --resume /home/dongwoo/Code/2026-usc/Spike-Driven-Transformer_MoE_KU/output/finetune/20260318-232205-sdt-data-cifar100-ft-ckpt27bfd333-t-4-spike-lif/checkpoint-24.pth.tar \
-  --num-images 16 \
-  --output-dir ./visual_ft --start-idx 3300 --overlay-alpha 0.7
+  # CUDA_VISIBLE_DEVICES=7 python visualize_expert_assignment.py \
+  # -c conf/cifar100/4_384_300E_t4.yml \
+  # --resume ./output/finetune/cifar100_ft_routerKD_KDw0p2-ft-ckpt27bfd333/checkpoint-39.pth.tar \
+  # --num-images 16 \
+  # --output-dir ./visual_ft --start-idx 3300 --overlay-alpha 0.7
+
+
+  
+CUDA_VISIBLE_DEVICES=7 python visualize_expert_assignment.py \
+  -c conf/cifar100/2_512_300E_t41_Const_E2.yml \
+    --resume ./output/20260319-2_512_200E_t41_Const_E2/model_best.pth.tar \
+    --num-images 4 \
+    --output-dir ./visual_T41CE2 --start-idx 3306 --overlay-alpha 0.7
+
+  CUDA_VISIBLE_DEVICES=7 python visualize_expert_assignment.py \
+  -c conf/cifar100/2_512_300E_t4111_Const_E4.yml \
+    --resume ./output/20260319-2_512_200E_t4111_Const_E4/model_best.pth.tar \
+    --num-images 4 \
+    --output-dir ./visual_T4111CE4 --start-idx 3306 --overlay-alpha 0.7
