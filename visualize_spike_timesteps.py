@@ -22,11 +22,13 @@ import torch
 import torch.nn as nn
 from collections import defaultdict, OrderedDict
 from PIL import Image
-from spikingjelly.clock_driven import functional
-from spikingjelly.clock_driven.neuron import MultiStepLIFNode, MultiStepParametricLIFNode
+from spikingjelly.activation_based import functional
 from timm.data import create_dataset, create_loader, resolve_data_config
 from timm.models import create_model
-from timm.models.helpers import clean_state_dict
+try:
+    from timm.models import clean_state_dict
+except Exception:
+    from timm.models.helpers import clean_state_dict
 from module.ms_conv import MS_MLP_Expert
 import model  # registers 'sdt'
 

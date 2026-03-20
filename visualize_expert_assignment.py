@@ -26,10 +26,13 @@ import yaml
 import numpy as np
 import torch
 
-from spikingjelly.clock_driven import functional
+from spikingjelly.activation_based import functional
 from timm.data import create_dataset, create_loader, resolve_data_config
 from timm.models import create_model
-from timm.models.helpers import clean_state_dict
+try:
+    from timm.models import clean_state_dict
+except Exception:
+    from timm.models.helpers import clean_state_dict
 
 import model  # registers 'sdt'
 

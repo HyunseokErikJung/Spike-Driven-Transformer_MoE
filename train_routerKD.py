@@ -8,20 +8,20 @@ import random as rd
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
-from spikingjelly.clock_driven import functional
+from spikingjelly.activation_based import functional
 from spikingjelly.datasets.cifar10_dvs import CIFAR10DVS
 from spikingjelly.datasets.dvs128_gesture import DVS128Gesture
-from spikingjelly.clock_driven.neuron import (
-    MultiStepLIFNode,
-    MultiStepParametricLIFNode,
-)
+from spikingjelly.activation_based.neuron import ParametricLIFNode
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.utils
 import torchvision.transforms as transforms
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
-import torchinfo
+try:
+    import torchinfo
+except ImportError:  # Optional dependency
+    torchinfo = None
 from typing import List
 from timm.data import (
     create_dataset,
@@ -38,7 +38,10 @@ from timm.models import (
     load_checkpoint,
     model_parameters,
 )
-from timm.models.helpers import clean_state_dict
+try:
+    from timm.models import clean_state_dict
+except Exception:
+    from timm.models.helpers import clean_state_dict
 from timm.utils import *
 from timm.loss import (
     LabelSmoothingCrossEntropy,
@@ -1099,13 +1102,15 @@ def main():
     )
     if args.local_rank == 0:
         _logger.info(f"Creating model {args.model}")
-        _logger.info(
-            str(
-                torchinfo.summary(
-                    model, (2, args.in_channels, args.img_size, args.img_size)
+        if torchinfo is not None:
+            _logger.info(
+                str(
+                    torchinfo.summary(
+                        model,
+                        (2, args.in_channels, args.img_size, args.img_size),
+                    )
                 )
             )
-        )
 
     if args.num_classes is None:
         assert hasattr(
@@ -1808,7 +1813,7 @@ def train_one_epoch(
                 expert_taus = defaultdict(lambda: defaultdict(dict))  # layer -> expert_id -> {fc1: tau, fc2: tau, fc1_grad: grad, fc2_grad: grad}
 
                 for name, module in model.named_modules():
-                    if isinstance(module, MultiStepParametricLIFNode) and '.experts.' in name:
+                    if isinstance(module, ParametricLIFNode) and '.experts.' in name:
                         # Extract layer and expert id
                         layer_match = re.search(r'block\.(\d+)\.', name)
                         expert_match = re.search(r'\.experts\.(\d+)\.', name)
