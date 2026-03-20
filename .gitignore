@@ -9,8 +9,6 @@ pretrain.py
 *.tar
 *.npy
 *.zip
-visual/
-visual_ft/
-visual_sct/
+visual*/
 .vscode/
 source_gc
