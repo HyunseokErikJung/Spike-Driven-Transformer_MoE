@@ -390,8 +390,8 @@ def save_grid_png(
         raise RuntimeError("No maps to plot.")
 
     cmap = _build_expert_cmap(num_experts)
-    fig_w = max(6.0, 1.6 * C)
-    fig_h = max(4.0, 1.6 * R)
+    fig_w = max(6.0, 2 * C)
+    fig_h = max(4.0, 2 * R)
     fig, axes = plt.subplots(R, C, figsize=(fig_w, fig_h), squeeze=False)
 
     for i in range(R):
