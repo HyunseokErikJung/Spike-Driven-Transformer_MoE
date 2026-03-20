@@ -1,10 +1,7 @@
 import torch
 import torch.nn as nn
 from timm.models.layers import DropPath
-from spikingjelly.clock_driven.neuron import (
-    MultiStepLIFNode,
-    MultiStepParametricLIFNode,
-)
+from spikingjelly.activation_based import neuron
 
 import torch.nn.functional as F
 import math
@@ -82,6 +79,7 @@ class MS_MLP_Expert(nn.Module):
         spike_mode="lif",
         layer=0,
         tau=2.0,
+        backend="triton",
 
         ## Added for shared Batchnorm
         # shared_fc1_bn=None,  # Shared BatchNorm for fc1 (optional)
@@ -111,10 +109,10 @@ class MS_MLP_Expert(nn.Module):
 
 
         if spike_mode == "lif":
-            self.fc1_lif = MultiStepLIFNode(tau=tau, detach_reset=True, backend="cupy")
+            self.fc1_lif = neuron.LIFNode(tau=tau, detach_reset=True, step_mode="m", backend=backend)
         elif spike_mode == "plif":
-            self.fc1_lif = MultiStepParametricLIFNode(
-                init_tau=tau, detach_reset=True, backend="cupy"
+            self.fc1_lif = neuron.ParametricLIFNode(
+                init_tau=tau, detach_reset=True, step_mode="m", backend=backend
             )
 
         self.fc2_conv = nn.Conv2d(
@@ -124,22 +122,23 @@ class MS_MLP_Expert(nn.Module):
         self.fc2_bn = nn.BatchNorm2d(out_features)
 
         if spike_mode == "lif":
-            self.fc2_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend="cupy")
+            self.fc2_lif = neuron.LIFNode(tau=2.0, detach_reset=True, step_mode="m", backend=backend)
         elif spike_mode == "plif":
-            self.fc2_lif = MultiStepParametricLIFNode(
-                init_tau=2.0, detach_reset=True, backend="cupy"
+            self.fc2_lif = neuron.ParametricLIFNode(
+                init_tau=2.0, detach_reset=True, step_mode="m", backend=backend
             )
 
         self.c_hidden = hidden_features
         self.c_output = out_features
         self.layer = layer
         
-    def reset(self):
-        for m in self.modules():
-            if m is self:
-                continue
-            if hasattr(m, "reset"):
-                m.reset()
+    # this is not needed. functional reset_net handles this.
+    # def reset(self):
+    #     for m in self.modules():
+    #         if m is self:
+    #             continue
+    #         if hasattr(m, "reset"):
+    #             m.reset()
 
     # def forward(self, x, hook=None, shared_fc1_bn=None, shared_fc2_bn=None):
     def forward(self, x, hook=None):
@@ -187,6 +186,7 @@ class MS_SSA_Conv(nn.Module):
         spike_mode="lif",
         dvs=False,
         layer=0,
+        backend="triton",
     ):
         super().__init__()
         assert (
@@ -201,61 +201,61 @@ class MS_SSA_Conv(nn.Module):
         self.q_conv = nn.Conv2d(dim, dim, kernel_size=1, stride=1, bias=False)
         self.q_bn = nn.BatchNorm2d(dim)
         if spike_mode == "lif":
-            self.q_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend="cupy")
+            self.q_lif = neuron.LIFNode(tau=2.0, detach_reset=True, step_mode="m", backend=backend)
         elif spike_mode == "plif":
-            self.q_lif = MultiStepParametricLIFNode(
-                init_tau=2.0, detach_reset=True, backend="cupy"
+            self.q_lif = neuron.ParametricLIFNode(
+                init_tau=2.0, detach_reset=True, step_mode="m", backend=backend
             )
 
         self.k_conv = nn.Conv2d(dim, dim, kernel_size=1, stride=1, bias=False)
         self.k_bn = nn.BatchNorm2d(dim)
         if spike_mode == "lif":
-            self.k_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend="cupy")
+            self.k_lif = neuron.LIFNode(tau=2.0, detach_reset=True, step_mode="m", backend=backend)
         elif spike_mode == "plif":
-            self.k_lif = MultiStepParametricLIFNode(
-                init_tau=2.0, detach_reset=True, backend="cupy"
+            self.k_lif = neuron.ParametricLIFNode(
+                init_tau=2.0, detach_reset=True, step_mode="m", backend=backend
             )
 
         self.v_conv = nn.Conv2d(dim, dim, kernel_size=1, stride=1, bias=False)
         self.v_bn = nn.BatchNorm2d(dim)
         if spike_mode == "lif":
-            self.v_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend="cupy")
+            self.v_lif = neuron.LIFNode(tau=2.0, detach_reset=True, step_mode="m", backend=backend)
         elif spike_mode == "plif":
-            self.v_lif = MultiStepParametricLIFNode(
-                init_tau=2.0, detach_reset=True, backend="cupy"
+            self.v_lif = neuron.ParametricLIFNode(
+                init_tau=2.0, detach_reset=True, step_mode="m", backend=backend
             )
 
         if spike_mode == "lif":
-            self.attn_lif = MultiStepLIFNode(
-                tau=2.0, v_threshold=0.5, detach_reset=True, backend="cupy"
+            self.attn_lif = neuron.LIFNode(
+                tau=2.0, v_threshold=0.5, detach_reset=True, step_mode="m", backend=backend
             )
         elif spike_mode == "plif":
-            self.attn_lif = MultiStepParametricLIFNode(
-                init_tau=2.0, v_threshold=0.5, detach_reset=True, backend="cupy"
+            self.attn_lif = neuron.ParametricLIFNode(
+                init_tau=2.0, v_threshold=0.5, detach_reset=True, step_mode="m", backend=backend
             )
 
         self.talking_heads = nn.Conv1d(
             num_heads, num_heads, kernel_size=1, stride=1, bias=False
         )
         if spike_mode == "lif":
-            self.talking_heads_lif = MultiStepLIFNode(
-                tau=2.0, v_threshold=0.5, detach_reset=True, backend="cupy"
+            self.talking_heads_lif = neuron.LIFNode(
+                tau=2.0, v_threshold=0.5, detach_reset=True, step_mode="m", backend=backend
             )
         elif spike_mode == "plif":
-            self.talking_heads_lif = MultiStepParametricLIFNode(
-                init_tau=2.0, v_threshold=0.5, detach_reset=True, backend="cupy"
+            self.talking_heads_lif = neuron.ParametricLIFNode(
+                init_tau=2.0, v_threshold=0.5, detach_reset=True, step_mode="m", backend=backend
             )
 
         self.proj_conv = nn.Conv2d(dim, dim, kernel_size=1, stride=1)
         self.proj_bn = nn.BatchNorm2d(dim)
 
         if spike_mode == "lif":
-            self.shortcut_lif = MultiStepLIFNode(
-                tau=2.0, detach_reset=True, backend="cupy"
+            self.shortcut_lif = neuron.LIFNode(
+                tau=2.0, detach_reset=True, step_mode="m", backend=backend
             )
         elif spike_mode == "plif":
-            self.shortcut_lif = MultiStepParametricLIFNode(
-                init_tau=2.0, detach_reset=True, backend="cupy"
+            self.shortcut_lif = neuron.ParametricLIFNode(
+                init_tau=2.0, detach_reset=True, step_mode="m", backend=backend
             )
 
         self.mode = mode
@@ -626,7 +626,9 @@ class MoE(nn.Module):
         # top_k = 2,  
         top_k = 1,
         experts = None,
-        expert_timesteps = None):
+        expert_timesteps = None,
+        backend = "triton",
+        ):
         super().__init__()
 
         self.num_experts = num_experts
@@ -649,6 +651,7 @@ class MoE(nn.Module):
                 spike_mode='lif',
                 # tau = tau_values[i],
                 tau=2.0,
+                backend=backend,
 
                 # use_shared_bn = True,
             )
@@ -800,6 +803,7 @@ class MS_Block_Conv(nn.Module):
         num_experts = 4,
         loss_coef=1e-2,
         expert_timesteps = None,
+        backend = "triton",
 
         ##
         # top_k = 2,  
@@ -819,6 +823,7 @@ class MS_Block_Conv(nn.Module):
             spike_mode=spike_mode,
             dvs=dvs,
             layer=layer,
+            backend=backend,
         )
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
@@ -837,6 +842,7 @@ class MS_Block_Conv(nn.Module):
             spike_mode='lif',
             loss_coef=loss_coef,
             expert_timesteps=expert_timesteps,
+            backend=backend,
 
             ##
             top_k = top_k

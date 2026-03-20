@@ -3,12 +3,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from timm.models.layers import trunc_normal_
-from timm.models.registry import register_model
+from timm.models import register_model
 from timm.models.vision_transformer import _cfg
-from spikingjelly.clock_driven.neuron import (
-    MultiStepLIFNode,
-    MultiStepParametricLIFNode,
-)
+from spikingjelly.activation_based import neuron
 from module import *
 
 
@@ -37,6 +34,7 @@ class SpikeDrivenTransformer(nn.Module):
         pooling_stat="1111",
         attn_mode="direct_xor",
         spike_mode="lif",
+        backend="triton",
         get_embed=False,
         dvs_mode=False,
         TET=False,
@@ -66,6 +64,7 @@ class SpikeDrivenTransformer(nn.Module):
             embed_dims=embed_dims,
             pooling_stat=pooling_stat,
             spike_mode=spike_mode,
+            backend=backend,
         )
 
         blocks = nn.ModuleList(
@@ -85,6 +84,7 @@ class SpikeDrivenTransformer(nn.Module):
                     sr_ratio=sr_ratios,
                     attn_mode=attn_mode,
                     spike_mode=spike_mode,
+                    backend=backend,
                     dvs=dvs_mode,
                     layer=j,
                 )
@@ -97,10 +97,10 @@ class SpikeDrivenTransformer(nn.Module):
 
         # classification head
         if spike_mode in ["lif", "alif", "blif"]:
-            self.head_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend="cupy")
+            self.head_lif = neuron.LIFNode(tau=2.0, detach_reset=True, step_mode="m", backend=backend)
         elif spike_mode == "plif":
-            self.head_lif = MultiStepParametricLIFNode(
-                init_tau=2.0, detach_reset=True, backend="cupy"
+            self.head_lif = neuron.ParametricLIFNode(
+                init_tau=2.0, detach_reset=True, step_mode="m", backend=backend
             )
         self.head = (
             nn.Linear(embed_dims, num_classes) if num_classes > 0 else nn.Identity()
@@ -151,3 +151,26 @@ def sdt(**kwargs):
     )
     model.default_cfg = _cfg()
     return model
+
+
+if __name__ == "__main__":
+    # Triton backend requires CUDA; use "torch" on CPU
+    backend = "triton" if torch.cuda.is_available() else "torch"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = SpikeDrivenTransformer(
+        in_channels=3,
+        img_size_h=64,
+        img_size_w=64,
+        num_classes=11,
+        embed_dims=128,
+        num_heads=4,
+        depths=2,
+        T=4,
+        backend=backend,
+    )
+    
+    x = torch.rand(2, 3, 64, 64).to(device)
+    model = model.to(device)
+    
+    out, _ = model(x)
+    print("forward ok:", out.shape)

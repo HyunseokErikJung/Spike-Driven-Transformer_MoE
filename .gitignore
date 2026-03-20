@@ -11,3 +11,4 @@ pretrain.py
 *.zip
 visual*/
 .vscode/
+source_gc
