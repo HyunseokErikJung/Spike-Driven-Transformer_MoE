@@ -1,3 +1,4 @@
+import os
 import math
 import random
 import numpy as np
@@ -8,6 +9,7 @@ from torch import Tensor
 from typing import List, Tuple, Optional, Dict
 from torchvision import transforms
 from torchvision.transforms import functional as F, InterpolationMode
+from torch.utils.data import Dataset
 
 __all__ = [
     "AutoAugmentPolicy",
@@ -819,3 +821,76 @@ class TrivialAugmentWide(torch.nn.Module):
         s += ", fill={fill}"
         s += ")"
         return s.format(**self.__dict__)
+
+class NCaltech101_aug(Dataset):
+    def __init__(self, data_path=None,
+                 data_type='train', transform=True):
+                 
+        data_path = data_path + "/frames_number_10_split_by_number"
+        self.filepath = os.path.join(data_path)
+        self.clslist = os.listdir(self.filepath)
+        self.clslist.sort()
+
+        self.dvs_filelist = []
+        self.targets = []
+        self.resize = transforms.Resize(size=(64, 64), interpolation=transforms.InterpolationMode.NEAREST)
+
+        for i, cls in enumerate(self.clslist):
+            file_list = os.listdir(os.path.join(self.filepath, cls))
+            num_file = len(file_list)
+
+            cut_idx = int(num_file * 0.9)
+            train_file_list = file_list[:cut_idx]
+            test_split_list = file_list[cut_idx:]
+            for file in file_list:
+                if data_type == 'train':
+                    if file in train_file_list:
+                        self.dvs_filelist.append(os.path.join(self.filepath, cls, file))
+                        self.targets.append(i)
+                else:
+                    if file in test_split_list:
+                        self.dvs_filelist.append(os.path.join(self.filepath, cls, file))
+                        self.targets.append(i)
+
+        self.data_num = len(self.dvs_filelist)
+        self.data_type = data_type
+        if data_type != 'train':
+            counts = np.unique(np.array(self.targets), return_counts=True)[1]
+            class_weights = counts.sum() / (counts * len(counts))
+            self.class_weights = torch.Tensor(class_weights)
+        self.classes = range(101)
+        self.transform = transform
+        self.rotate = transforms.RandomRotation(degrees=15)
+        self.shearx = transforms.RandomAffine(degrees=0, shear=(-15, 15))
+
+    def __getitem__(self, index):
+        file_pth = self.dvs_filelist[index]
+        label = self.targets[index]
+        data = torch.from_numpy(np.load(file_pth)['frames']).float()
+        data = self.resize(data)
+
+        if self.transform:
+
+            choices = ['roll', 'rotate', 'shear']
+            aug = np.random.choice(choices)
+            if aug == 'roll':
+                off1 = random.randint(-3, 3)
+                off2 = random.randint(-3, 3)
+                data = torch.roll(data, shifts=(off1, off2), dims=(2, 3))
+            if aug == 'rotate':
+                data = self.rotate(data)
+            if aug == 'shear':
+                data = self.shearx(data)
+
+        return data, label
+
+    def __len__(self):
+        return self.data_num
+
+
+
+def build_ncaltech(data_path, transform=False):
+    train_dataset = NCaltech101_aug(data_path=data_path, transform=transform)
+    val_dataset = NCaltech101_aug(data_path=data_path, data_type='test', transform=False)
+
+    return train_dataset, val_dataset
