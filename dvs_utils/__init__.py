@@ -1,11 +1,12 @@
 from .cifar10_dvs_loader import DVSCifar10
-from .dvs_augment import SNNAugmentWide, Resize, Cutout
+from .dvs_augment import SNNAugmentWide, Resize, Cutout, build_ncaltech
 from .dvs_utils import split_to_train_test_set
 
 DVS_DATASET = [
     "cifar10-dvs",
     "cifar10-dvs-tet",
     "gesture",
+    "ncaltech101",
 ]
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "SNNAugmentWide",
     "split_to_train_test_set",
     "Cutout",
+    "build_ncaltech",
 ]
