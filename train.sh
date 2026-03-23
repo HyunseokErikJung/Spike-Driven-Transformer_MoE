@@ -20,4 +20,14 @@
 #   --experiment "cifar100_scratch_routerKD_bal
 
 
-CUDA_VISIBLE_DEVICES=3 python train.py -c conf/cifar100/2_512_300E_t4_Const_E4.yml -data-dir /dataset/CIFAR100/ --model sdt --spike-mode lif
+
+CUDA_VISIBLE_DEVICES=1 python train.py -c conf/cifar100/2_512_300E_t41_Const_E2_v2.yml -data-dir /dataset/CIFAR100/ --model sdt --spike-mode lif \
+  --experiment "260320-2_512_300E_t41_Const_E2_v2" 
+CUDA_VISIBLE_DEVICES=2 python train.py -c conf/cifar100/2_512_300E_t4111_Const_E4_v2.yml -data-dir /dataset/CIFAR100/ --model sdt --spike-mode lif \
+  --experiment "260320-2_512_300E_t4111_Const_E4_v2"
+CUDA_VISIBLE_DEVICES=3 python train.py -c conf/cifar100/2_512_300E_t4111_Const_E8_v2.yml -data-dir /dataset/CIFAR100/ --model sdt --spike-mode lif \
+  --experiment "260320-2_512_300E_t4111_Const_E8_v2"
+
+
+
+# CUDA_VISIBLE_DEVICES=2,3 python -m torch.distributed.launch --nproc_per_node=1 --master_port 29501 train.py -c conf/imagenet/8_768_300E_t41_Const_E2.yml

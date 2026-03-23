@@ -866,7 +866,7 @@ parser.add_argument(
     metavar="N",
     help="Test/inference time augmentation (oversampling) factor. 0=None (default: 0)",
 )
-parser.add_argument("--local_rank", default=0, type=int)
+parser.add_argument("--local-rank", default=0, type=int)
 parser.add_argument(
     "--use-multi-epochs-loader",
     action="store_true",

@@ -36,7 +36,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from collections import OrderedDict
-from spikingjelly.clock_driven import functional
+from spikingjelly.activation_based import functional
 from timm.data import create_dataset, create_loader, resolve_data_config
 from timm.models import create_model
 from timm.models.helpers import clean_state_dict
@@ -66,7 +66,30 @@ def parse_args():
     p.add_argument("--num-classes", type=int, default=1000)
     p.add_argument("--time-steps", type=int, default=4)
     p.add_argument("--num-heads", type=int, default=8)
-    p.add_argument("--mlp-ratio", type=int, default=4)
+    p.add_argument("--mlp-ratio", type=float, default=4.0)
+    p.add_argument(
+        "--num-experts",
+        type=int,
+        default=4,
+        help="number of MoE experts per block (default: 4)",
+    )
+    p.add_argument(
+        "--expert-timesteps",
+        default=None,
+        help="MoE expert timesteps per expert (from config: list of int, e.g. [4,1,1,1]). None = model default.",
+    )
+    p.add_argument(
+        "--pretrained",
+        action="store_true",
+        default=False,
+        help="ignored for custom sdt; kept for create_model API compatibility",
+    )
+    p.add_argument(
+        "--dvs-mode",
+        action="store_true",
+        default=False,
+        help="SpikeDrivenTransformer dvs_mode (MS-SA erode path). For gesture or other DVS data, pass this or set dvs_mode in yaml. cifar10-dvs / cifar10-dvs-tet are set True in main() like train.py.",
+    )
     p.add_argument("--img-size", type=int, default=None)
     p.add_argument("--patch-size", type=int, default=None)
     p.add_argument("--dim", type=int, default=512)
@@ -106,30 +129,32 @@ def parse_args():
 
 def load_model_and_checkpoint(args):
     m = create_model(
-        args.model,
-        T=args.time_steps,
-        pretrained=False,
-        drop_rate=args.drop,
-        drop_path_rate=args.drop_path,
-        drop_block_rate=args.drop_block,
-        num_heads=args.num_heads,
-        num_classes=args.num_classes,
-        pooling_stat=args.pooling_stat,
-        img_size_h=args.img_size,
-        img_size_w=args.img_size,
-        patch_size=args.patch_size,
-        embed_dims=args.dim,
-        mlp_ratios=args.mlp_ratio,
-        in_channels=args.in_channels,
-        qkv_bias=False,
-        depths=args.layer,
-        sr_ratios=1,
-        spike_mode=args.spike_mode,
-        dvs_mode=args.dataset in dvs_utils.DVS_DATASET,
-        TET=args.TET,
-    )
+            args.model,
+            T=args.time_steps,
+            pretrained=args.pretrained,
+            drop_rate=args.drop,
+            drop_path_rate=args.drop_path,
+            drop_block_rate=args.drop_block,
+            num_heads=args.num_heads,
+            num_classes=args.num_classes,
+            pooling_stat=args.pooling_stat,
+            img_size_h=args.img_size,
+            img_size_w=args.img_size,
+            patch_size=args.patch_size,
+            embed_dims=args.dim,
+            mlp_ratios=args.mlp_ratio,
+            num_experts=args.num_experts,
+            expert_timesteps=getattr(args, "expert_timesteps", None),
+            in_channels=args.in_channels,
+            qkv_bias=False,
+            depths=args.layer,
+            sr_ratios=1,
+            spike_mode=args.spike_mode,
+            dvs_mode=args.dvs_mode,
+            TET=args.TET,
+        )
 
-    ckpt = torch.load(args.resume, map_location="cpu")
+    ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
     if isinstance(ckpt, dict) and "state_dict" in ckpt:
         state_dict = clean_state_dict(ckpt["state_dict"])
     else:
@@ -954,6 +979,10 @@ svg text { font-family: 'Segoe UI', system-ui, sans-serif; }
 
 def main():
     args = parse_args()
+    # Match train.py: these datasets set dvs_mode on the model (yaml values for other keys still apply).
+    if args.dataset in ["cifar10-dvs-tet", "cifar10-dvs"]:
+        args.dvs_mode = True
+
     os.makedirs(args.output_dir, exist_ok=True)
 
     print("[1/4] Loading model ...")

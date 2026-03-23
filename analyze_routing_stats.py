@@ -26,7 +26,7 @@ from collections import defaultdict
 import numpy as np
 import torch
 import torch.nn.functional as F
-from spikingjelly.clock_driven import functional
+from spikingjelly.activation_based import functional
 from timm.data import create_dataset, create_loader, resolve_data_config
 from timm.models import create_model
 from timm.models.helpers import clean_state_dict
@@ -126,7 +126,7 @@ def load_model_and_checkpoint(args):
         TET=args.TET,
     )
 
-    ckpt = torch.load(args.resume, map_location="cpu")
+    ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
     if isinstance(ckpt, dict) and "state_dict" in ckpt:
         state_dict = clean_state_dict(ckpt["state_dict"])
     else:

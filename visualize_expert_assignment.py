@@ -142,7 +142,7 @@ def load_model_and_checkpoint(args):
         TET=args.TET,
     )
 
-    ckpt = torch.load(args.resume, map_location="cpu")
+    ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
     if isinstance(ckpt, dict) and "state_dict" in ckpt:
         state_dict = clean_state_dict(ckpt["state_dict"])
     else:
