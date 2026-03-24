@@ -1,7 +1,5 @@
-
-
-
 import argparse
+import ast
 import time
 import yaml
 import os
@@ -126,7 +124,9 @@ def resume_checkpoint(
     else:
         _logger.error("No checkpoint found at '{}'".format(checkpoint_path))
         raise FileNotFoundError()
-
+    
+    
+torch.backends.cudnn.benchmark = True
 # The first arg parser parses out only the --config argument, this argument is used to
 # load a yaml file containing key-values that override the defaults for the main parser below
 config_parser = parser = argparse.ArgumentParser(
@@ -293,6 +293,11 @@ parser.add_argument(
     "--expert-timesteps",
     default=None,
     help="MoE expert timesteps per expert (from config: list of int, e.g. [4, 1, 1, 1]). None = use default.",
+)
+parser.add_argument(
+    "--only-expert-ids",
+    default=None,
+    help="Optional expert-id whitelist for MoE routing/pruning (e.g. [0] or [0,1]). None disables pruning.",
 )
 parser.add_argument(
     "--gp",
@@ -928,9 +933,28 @@ def _parse_args():
     return args, args_text
 
 
+def _normalize_only_expert_ids(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [int(v) for v in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "" or stripped.lower() == "none":
+            return None
+        parsed = ast.literal_eval(stripped)
+        if isinstance(parsed, (list, tuple)):
+            return [int(v) for v in parsed]
+        return [int(parsed)]
+    return [int(value)]
+
+
 def main():
     setup_default_logging()
     args, args_text = _parse_args()
+    args.only_expert_ids = _normalize_only_expert_ids(
+        getattr(args, "only_expert_ids", None)
+    )
 
     if args.log_wandb:
         if has_wandb:
@@ -983,8 +1007,8 @@ def main():
             "Install NVIDA apex or upgrade to PyTorch 1.6"
         )
 
-    torch.backends.cudnn.benchmark = False
-    # torch.backends.cudnn.benchmark = True
+    # torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
     os.environ["PYTHONHASHSEED"] = str(args.seed)
     np.random.seed(args.seed)
     torch.initial_seed()  # dataloader multi processing
@@ -1025,8 +1049,12 @@ def main():
         dvs_mode=args.dvs_mode,
         TET=args.TET,
     )
+    for module in model.modules():
+        if hasattr(module, "only_expert_ids"):
+            module.only_expert_ids = args.only_expert_ids
     if args.local_rank == 0:
         _logger.info(f"Creating model {args.model}")
+        _logger.info(f"MoE only_expert_ids: {args.only_expert_ids}")
         _logger.info(
             str(
                 torchinfo.summary(

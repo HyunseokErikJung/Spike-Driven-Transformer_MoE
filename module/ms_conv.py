@@ -354,6 +354,7 @@ class Top2Gating(nn.Module):
         # capacity_factor_train = 1.25,
         # # capacity_factor_train = 2.,
         # capacity_factor_eval = 2.
+        backend='triton',
         ):
         super().__init__()
 
@@ -378,7 +379,8 @@ class Top2Gating(nn.Module):
         #     nn.Linear(router_hidden, num_gates, bias=False)
         # )
         # self.temporal_scale = nn.Parameter(torch.zeros(dim))
-        self.gate_lif1 = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        
+        self.gate_lif1 = neuron.LIFNode(tau=2.0, detach_reset=True, step_mode="m", backend=backend)
 
         self.gate_fc1 = nn.Linear(dim, num_gates, bias=False)
 
@@ -462,7 +464,7 @@ class Top2Gating(nn.Module):
         x_gate = x.flatten(3).permute(0, 1, 3, 2).contiguous()  # T, B, N, C
         x_gate = self.gate_fc1(x_gate)         # (T, B, N, router_hidden)
         # x_pooled = x_gate.mean(dim=0)  # B, N, C
-        x_pooled = x_gate[0] 
+        x_pooled = x_gate[0] ##################################################### DONG: CHECK THIS. only using first timestep!!
 
         raw_gates = x_pooled.softmax(dim = -1)
 
@@ -624,7 +626,7 @@ class MoE(nn.Module):
         gating_kwargs = {'top_k' : top_k, 'second_policy_train': second_policy_train, 'second_policy_eval': second_policy_eval, 
                          'second_threshold_train': second_threshold_train, 'second_threshold_eval': second_threshold_eval, 
                          'capacity_factor_train': capacity_factor_train, 'capacity_factor_eval': capacity_factor_eval}
-        self.gate = Top2Gating(dim, num_gates = num_experts, **gating_kwargs)
+        self.gate = Top2Gating(dim, num_gates = num_experts, backend=backend, **gating_kwargs)
 
         # # Create shared BatchNorms for all experts
         # mlp_hidden_dim = hidden_features or dim * 4
@@ -661,7 +663,7 @@ class MoE(nn.Module):
         # # None keeps all experts (default behavior).
 
 
-        self.only_expert_ids = [0]
+        self.only_expert_ids = None
         ############# For Pruning #################
 
 

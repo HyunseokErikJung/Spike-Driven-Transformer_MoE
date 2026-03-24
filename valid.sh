@@ -173,3 +173,15 @@ Mean ratio non T=4 expert tokens  : 0.6159
 Mean overlap (A ∩ C) / |A|          : 0.3824  (A = T=4 expert tokens, C = random tokens)
 
 #결론 -> mlp_ratio를 2 아래로 내리면 expert가 너무 약해짐.
+
+
+
+
+#########################
+python run_temporal_merging_experiments.py \
+  -c conf/gesture/2_256_200E_t101_Const_E2.yml \
+  --resume output/260324-2_256_200E_t101_Const_E2_NewRouter/model_best.pth.tar \
+  --device cuda:3 \
+  --experiment-name gesture_temporal_merge \
+  --max-batches 16 \
+  --compute-isi

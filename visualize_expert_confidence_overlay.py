@@ -14,6 +14,7 @@ Example:
 """
 
 import argparse
+import ast
 import os
 import re
 from collections import OrderedDict
@@ -52,6 +53,11 @@ def parse_args():
     p.add_argument("--mlp-ratio", type=float, default=4.0)
     p.add_argument("--num-experts", type=int, default=4)
     p.add_argument("--expert-timesteps", default=None, help="from config: list of int. None = default.")
+    p.add_argument(
+        "--only-expert-ids",
+        default=None,
+        help="Optional expert-id whitelist for MoE routing/pruning (e.g. [0] or [0,1]). None disables pruning.",
+    )
     p.add_argument("--img-size", type=int, default=None)
     p.add_argument("--patch-size", type=int, default=None)
     p.add_argument("--dim", type=int, default=512)
@@ -96,6 +102,9 @@ def parse_args():
 
 
 def load_model_and_checkpoint(args):
+    only_expert_ids = _normalize_only_expert_ids(
+        getattr(args, "only_expert_ids", None)
+    )
     m = create_model(
         args.model,
         T=args.time_steps,
@@ -121,6 +130,9 @@ def load_model_and_checkpoint(args):
         dvs_mode=False,
         TET=args.TET,
     )
+    for module in m.modules():
+        if hasattr(module, "only_expert_ids"):
+            module.only_expert_ids = only_expert_ids
     ckpt = torch.load(args.resume, map_location="cpu")
     if isinstance(ckpt, dict) and "state_dict" in ckpt:
         state_dict = clean_state_dict(ckpt["state_dict"])
@@ -134,6 +146,22 @@ def load_model_and_checkpoint(args):
     m = m.to(args.device)
     m.eval()
     return m
+
+
+def _normalize_only_expert_ids(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [int(v) for v in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "" or stripped.lower() == "none":
+            return None
+        parsed = ast.literal_eval(stripped)
+        if isinstance(parsed, (list, tuple)):
+            return [int(v) for v in parsed]
+        return [int(parsed)]
+    return [int(value)]
 
 
 def make_loader(args):

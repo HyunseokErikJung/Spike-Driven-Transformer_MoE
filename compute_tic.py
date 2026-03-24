@@ -30,6 +30,7 @@ Usage:
 """
 
 import argparse
+import ast
 import os
 import yaml
 import numpy as np
@@ -77,6 +78,11 @@ def parse_args():
         "--expert-timesteps",
         default=None,
         help="MoE expert timesteps per expert (from config: list of int, e.g. [4,1,1,1]). None = model default.",
+    )
+    p.add_argument(
+        "--only-expert-ids",
+        default=None,
+        help="Optional expert-id whitelist for MoE routing/pruning (e.g. [0] or [0,1]). None disables pruning.",
     )
     p.add_argument(
         "--pretrained",
@@ -128,6 +134,9 @@ def parse_args():
 # ---------------------------------------------------------------------------
 
 def load_model_and_checkpoint(args):
+    only_expert_ids = _normalize_only_expert_ids(
+        getattr(args, "only_expert_ids", None)
+    )
     m = create_model(
             args.model,
             T=args.time_steps,
@@ -153,6 +162,9 @@ def load_model_and_checkpoint(args):
             dvs_mode=args.dvs_mode,
             TET=args.TET,
         )
+    for module in m.modules():
+        if hasattr(module, "only_expert_ids"):
+            module.only_expert_ids = only_expert_ids
 
     ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
     if isinstance(ckpt, dict) and "state_dict" in ckpt:
@@ -168,6 +180,22 @@ def load_model_and_checkpoint(args):
     m = m.to(args.device)
     m.eval()
     return m
+
+
+def _normalize_only_expert_ids(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [int(v) for v in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "" or stripped.lower() == "none":
+            return None
+        parsed = ast.literal_eval(stripped)
+        if isinstance(parsed, (list, tuple)):
+            return [int(v) for v in parsed]
+        return [int(parsed)]
+    return [int(value)]
 
 
 def make_loader(args):

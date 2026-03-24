@@ -31,3 +31,10 @@ CUDA_VISIBLE_DEVICES=3 python train.py -c conf/cifar100/2_512_300E_t4111_Const_E
 
 
 # CUDA_VISIBLE_DEVICES=2,3 python -m torch.distributed.launch --nproc_per_node=1 --master_port 29501 train.py -c conf/imagenet/8_768_300E_t41_Const_E2.yml
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py -c conf/cifar100/2_512_300E_t41_Const_E2_v2.yml -data-dir /dataset/CIFAR100/ --model sdt --spike-mode lif \
+  --experiment "260324-2_512_300E_t41_Const_E2_v2_NewRouter"
+
+CUDA_VISIBLE_DEVICES=3 python train.py -c conf/gesture/2_256_200E_t101_Const_E2.yml --model sdt --spike-mode lif \
+  --experiment "260324-gesture-2_256_200E_t101_Const_E2_NewRouter"
