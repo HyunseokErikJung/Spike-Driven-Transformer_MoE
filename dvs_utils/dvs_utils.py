@@ -47,3 +47,10 @@ def split_to_train_test_set(
     return torch.utils.data.Subset(origin_dataset, train_idx), torch.utils.data.Subset(
         origin_dataset, test_idx
     )
+
+    
+def build_ncaltech(data_path, transform=False):
+    train_dataset = NCaltech101_aug(data_path=data_path, transform=transform)
+    val_dataset = NCaltech101_aug(data_path=data_path, data_type='test', transform=False)
+
+    return train_dataset, val_dataset
