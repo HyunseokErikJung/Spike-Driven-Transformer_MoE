@@ -142,5 +142,34 @@ Mean overlap (A ∩ C) / |A|          : 0.2719  (A = T=4 expert tokens, C = rand
 
 
 
-# 바로 위에 대한 추가 실험
+# 바로 위에 대한 추가 실험. mlp ratio를 2.0으로 증가시켜서 실험함.
+#79.18% 로 종료
 CUDA_VISIBLE_DEVICES=1 python train.py -c conf/cifar100/2_512_300E_t4111_R1_E4.yml -data-dir /dataset/CIFAR100/ --model sdt --spike-mode lif
+
+
+# 시각화 이쁘게 잘나옴
+  CUDA_VISIBLE_DEVICES=1 python visualize_expert_assignment.py \
+  -c conf/cifar100/2_512_300E_t4111_R2_E4.yml \
+    --resume ./output/260323-2_512_300E_t4111_R2_E4/model_best.pth.tar \
+    --num-images 4 \
+    --output-dir ./visual/T4111R2E4 --start-idx 3306 --overlay-alpha 0.7
+
+# 이 결과도 괜찮음.
+  CUDA_VISIBLE_DEVICES=1 python eval_routing_masks.py \
+    -c  output/260323-2_512_300E_t4111_R2_E4/args.yaml\
+    --resume output/260323-2_512_300E_t4111_R2_E4/model_best.pth.tar
+
+
+=== Routing-mask accuracy comparison (CIFAR-100 eval set) ===
+Case A   (T=4 expert only)          : 0.7860
+Case A'  (T=4 expert, half tokens)  : 0.7605
+Case B   (non T=4 experts only)     : 0.6604
+Case C   (random, |C| = |A|)        : 0.7644
+Case C'  (random, |C'| = |A'|)      : 0.4590
+
+=== Average token assignment ratios (last block) ===
+Mean ratio T=4 expert tokens      : 0.3841
+Mean ratio non T=4 expert tokens  : 0.6159
+Mean overlap (A ∩ C) / |A|          : 0.3824  (A = T=4 expert tokens, C = random tokens)
+
+#결론 -> mlp_ratio를 2 아래로 내리면 expert가 너무 약해짐.

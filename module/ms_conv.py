@@ -132,13 +132,6 @@ class MS_MLP_Expert(nn.Module):
         self.c_output = out_features
         self.layer = layer
         
-    # this is not needed. functional reset_net handles this.
-    # def reset(self):
-    #     for m in self.modules():
-    #         if m is self:
-    #             continue
-    #         if hasattr(m, "reset"):
-    #             m.reset()
 
     # def forward(self, x, hook=None, shared_fc1_bn=None, shared_fc2_bn=None):
     def forward(self, x, hook=None):
@@ -633,8 +626,9 @@ class MoE(nn.Module):
 
         self.num_experts = num_experts
         
-        gating_kwargs = {'top_k' : top_k, 'second_policy_train': second_policy_train, 'second_policy_eval': second_policy_eval, 'second_threshold_train': second_threshold_train, 'second_threshold_eval': second_threshold_eval, 'capacity_factor_train': capacity_factor_train, 'capacity_factor_eval': capacity_factor_eval}
-        # gating_kwargs = {'second_policy_train': second_policy_train, 'second_policy_eval': second_policy_eval, 'second_threshold_train': second_threshold_train, 'second_threshold_eval': second_threshold_eval, 'capacity_factor_train': capacity_factor_train, 'capacity_factor_eval': capacity_factor_eval}
+        gating_kwargs = {'top_k' : top_k, 'second_policy_train': second_policy_train, 'second_policy_eval': second_policy_eval, 
+                         'second_threshold_train': second_threshold_train, 'second_threshold_eval': second_threshold_eval, 
+                         'capacity_factor_train': capacity_factor_train, 'capacity_factor_eval': capacity_factor_eval}
         self.gate = Top2Gating(dim, num_gates = num_experts, **gating_kwargs)
 
         # # Create shared BatchNorms for all experts
@@ -659,18 +653,10 @@ class MoE(nn.Module):
         ])
         
         # Each expert processes a different number of timesteps: [1, 2, ..., num_experts]
-        # self.expert_timesteps = list(range(1, num_experts + 1))
-        # self.expert_timesteps = [4, 3, 2, 1]
         if expert_timesteps is None:
             self.expert_timesteps = [4, 1, 1, 1]
         else:
             self.expert_timesteps = list(expert_timesteps)
-        # self.expert_timesteps = [4, 4, 4, 4] # baseline
-        # self.expert_timesteps = [10, 10, 10, 1] # for dvsgesture
-        # self.expert_timesteps = [1, 1, 4, 4]
-        # self.expert_timesteps = [4, 4, 1, 1]
-        # self.expert_timesteps = [1, 1, 1, 4]  # 3 cheap experts + 1 full-timestep expert
-
 
 
         ############# For Pruning #################
