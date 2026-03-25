@@ -368,8 +368,8 @@ def run_exp1_router_stats(model_inst, loader, args, capture):
 
 
 @contextmanager
-def temporary_hooks(hooks):
-    handles = [h() for h in hooks]
+def temporary_hooks(model_inst, hooks):
+    handles = [h(model_inst) for h in hooks]
     try:
         yield
     finally:
@@ -447,7 +447,7 @@ def run_exp2_t_sensitivity(model_inst, loader, args):
     base_acc, n = run_eval_accuracy(model_inst, loader, args)
     for b in range(args.layer):
         for which in ["highT", "lowT"]:
-            with temporary_hooks([build_t_collapse_hook(b, which=which)]):
+            with temporary_hooks(model_inst, [build_t_collapse_hook(b, which=which)]):
                 acc, _ = run_eval_accuracy(model_inst, loader, args)
             rows.append({
                 "block": b,
@@ -464,7 +464,9 @@ def run_exp3_counterfactual(model_inst, loader, args):
     base_acc, n = run_eval_accuracy(model_inst, loader, args)
     for b in range(args.layer):
         for mode in ["swap_high_low", "permute_experts_random"]:
-            with temporary_hooks([build_counterfactual_gate_hook(b, mode=mode, seed=args.seed + b)]):
+            with temporary_hooks(
+                model_inst, [build_counterfactual_gate_hook(b, mode=mode, seed=args.seed + b)]
+            ):
                 acc, _ = run_eval_accuracy(model_inst, loader, args)
             rows.append({
                 "block": b,
