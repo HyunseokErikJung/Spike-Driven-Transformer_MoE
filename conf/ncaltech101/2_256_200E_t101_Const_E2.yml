@@ -1,22 +1,22 @@
-# Dataset / Model parameters
-data_dir: /dataset/DVS128Gesture/
-dataset: gesture
+data_dir: /dataset/NCALTECH101
+dataset: ncaltech101
 pretrained: False
-num_classes: 11
+num_classes: 101
 num_heads: 8
-img_size: 128
+img_size: 64
 crop_pct: 1.0
 scale:
     - 1.0
     - 1.0
-ratio: [1.0, 1.0]
+ratio: [0.2, 1.0]
 color_jitter: 0.
 interpolation: bicubic
 train_interpolation: bicubic
-use_conv_as_linear: true
-pooling_stat: "0111"
+use_conv_as_linear: True
+pooling_stat: "0011"
 in_channels: 2
 time_steps: 10
+chunk_size: 5
 layer: 2
 dim: 256
 mlp-ratio: 2.0
@@ -24,6 +24,7 @@ mlp_ratio: 2.0
 num_experts: 2
 expert_timesteps: [10, 1] #"--expert-timesteps",
 only_expert_ids: null # e.g. [0], [0,1]. null = pruning off (default)
+hflip: 0.5
 
 # Model Exponential Moving Average
 model-ema: False
@@ -33,17 +34,16 @@ model-ema-decay: 0.9998
 seed: 42
 amp: True
 channels-last: False
-batch_size: 16
-val_batch_size: 16
-lr: 3e-3
-min_lr: 1e-5
+batch_size: 16  # 32
+val_batch_size: 16 # 32
+lr: 0.01 # 7.5e-3
+min_lr: 3e-4
 sched: cosine
 weight_decay: 1e-4
 epochs: 200
 cooldown_epochs: 10
 warmup_epochs: 10
-warmup_lr: 1e-5
-opt: lamb
+warmup_lr: 1e-3
+opt: adamw
 smoothing: 0.1
 workers: 8
-
