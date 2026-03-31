@@ -178,6 +178,44 @@ Mean overlap (A ∩ C) / |A|          : 0.3824  (A = T=4 expert tokens, C = rand
 
 
 #########################
+#newrouter 실험 결과.
+#2-512-Const_T41_E2로 79.51 정확도 달성
+
+#NewRouter 결과 시각화.  -> 이쁘게 잘나옴
+CUDA_VISIBLE_DEVICES=2 python visualize_expert_assignment.py \
+  -c conf/cifar100/2_512_300E_t41_Const_E2_v2.yml \
+  --resume output/260324-2_512_300E_t41_Const_E2_v2_NewRouter/model_best.pth.tar \
+  --output-dir ./visual/newrouter_t41_CE2 --start-idx 3306 --overlay-alpha 0.7 --num-images 4
+
+python run_temporal_merging_experiments.py \
+  -c conf/cifar100/2_512_300E_t41_Const_E2_v2.yml \
+  --resume output/260324-2_512_300E_t41_Const_E2_v2_NewRouter/model_best.pth.tar \
+  --device cuda:2 \
+  --experiment-name cifar100_temporal_merge \
+  --max-batches 32 \
+  --compute-isi
+
+python plot_temporal_merging_results.py \
+  --result-dir analysis/temporal_merging/cifar100_temporal_merge/
+
+
+
+#expert pruning 적용. 79.51 => 79.24%로 정확도 하락. (USC는 gelu일때 79.04 -> 78.49로 떨어졌음 내가 좀 덜 떨어지네)
+CUDA_VISIBLE_DEVICES=2 python firing_num.py \
+  -c conf/cifar100/2_512_300E_t41_Const_E2_v2.yml \
+  --resume output/260324-2_512_300E_t41_Const_E2_v2_NewRouter/model_best.pth.tar \
+  --no-resume-opt
+
+  python analyze_routing_stats.py \
+    -c conf/cifar100/2_512_300E_t41_Const_E2_v2.yml \
+    --resume output/260324-2_512_300E_t41_Const_E2_v2_NewRouter/model_best.pth.tar \
+    --output-dir ./visual/22
+
+
+
+
+
+
 python run_temporal_merging_experiments.py \
   -c conf/gesture/2_256_200E_t101_Const_E2.yml \
   --resume output/260324-2_256_200E_t101_Const_E2_NewRouter/model_best.pth.tar \
@@ -185,3 +223,5 @@ python run_temporal_merging_experiments.py \
   --experiment-name gesture_temporal_merge \
   --max-batches 16 \
   --compute-isi
+
+

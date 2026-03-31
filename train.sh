@@ -38,3 +38,8 @@ CUDA_VISIBLE_DEVICES=2 python train.py -c conf/cifar100/2_512_300E_t41_Const_E2_
 
 CUDA_VISIBLE_DEVICES=3 python train.py -c conf/gesture/2_256_200E_t101_Const_E2.yml --model sdt --spike-mode lif \
   --experiment "260324-gesture-2_256_200E_t101_Const_E2_NewRouter"
+
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py -c conf/cifar100/2_512_300E_t41_Const_E2_v2.yml -data-dir /dataset/CIFAR100/ --model sdt --spike-mode lif \
+  --experiment "260324-sizetest"

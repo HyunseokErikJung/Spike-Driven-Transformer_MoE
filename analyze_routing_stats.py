@@ -33,6 +33,7 @@ from timm.models import create_model
 from timm.models.helpers import clean_state_dict
 
 import model  # registers 'sdt'
+import dvs_utils
 
 
 def parse_args():
@@ -109,6 +110,7 @@ def load_model_and_checkpoint(args):
     only_expert_ids = _normalize_only_expert_ids(
         getattr(args, "only_expert_ids", None)
     )
+    dvs_mode = bool(args.dataset in ["cifar10-dvs-tet", "cifar10-dvs", "ncaltech101"])
     m = create_model(
         args.model,
         T=args.time_steps,
@@ -131,7 +133,7 @@ def load_model_and_checkpoint(args):
         depths=args.layer,
         sr_ratios=1,
         spike_mode=args.spike_mode,
-        dvs_mode=False,
+        dvs_mode=dvs_mode,
         TET=args.TET,
     )
     for module in m.modules():
@@ -171,6 +173,47 @@ def _normalize_only_expert_ids(value):
 
 
 def make_loader(args):
+    if args.dataset in dvs_utils.DVS_DATASET:
+        # Keep this aligned with the DVS dataset branches in `train.py`.
+        if args.dataset == "cifar10-dvs-tet":
+            dataset_eval = dvs_utils.DVSCifar10(
+                root=os.path.join(args.data_dir, "test"),
+                train=False,
+            )
+        elif args.dataset == "cifar10-dvs":
+            from spikingjelly.datasets.cifar10_dvs import CIFAR10DVS
+
+            dataset = CIFAR10DVS(
+                args.data_dir,
+                data_type="frame",
+                frames_number=args.time_steps,
+                split_by="number",
+            )
+            _, dataset_eval = dvs_utils.split_to_train_test_set(0.9, dataset, 10)
+        elif args.dataset == "gesture":
+            from spikingjelly.datasets.dvs128_gesture import DVS128Gesture
+
+            dataset_eval = DVS128Gesture(
+                args.data_dir,
+                train=False,
+                data_type="frame",
+                frames_number=args.time_steps,
+                split_by="number",
+            )
+        elif args.dataset == "ncaltech101":
+            _, dataset_eval = dvs_utils.build_ncaltech(args.data_dir, True)
+        else:
+            raise ValueError(f"Unsupported DVS dataset: {args.dataset}")
+
+        loader = torch.utils.data.DataLoader(
+            dataset_eval,
+            batch_size=args.val_batch_size,
+            shuffle=False,
+            num_workers=args.workers,
+            pin_memory=True,
+        )
+        return loader
+
     dataset_eval = create_dataset(
         args.dataset,
         root=args.data_dir,

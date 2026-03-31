@@ -1,5 +1,5 @@
 # Dataset / Model parameters
-data_dir: /scratch1/bkrhee/data/DVSGesture/
+data_dir: /dataset/DVS128Gesture/
 dataset: gesture
 pretrained: False
 num_classes: 11
@@ -20,6 +20,8 @@ time_steps: 10
 layer: 2
 dim: 256
 mlp-ratio: 4
+num_experts: 1
+expert_timesteps: [10, 1, 1, 1] #"--expert-timesteps",
 
 # Model Exponential Moving Average
 model-ema: False

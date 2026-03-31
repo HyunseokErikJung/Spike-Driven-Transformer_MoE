@@ -1,74 +1,63 @@
 import argparse
+import ast
 import time
 import yaml
-import json
 import os
-import numpy as np
 import logging
+import numpy as np
+import random as rd
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
 from spikingjelly.activation_based import functional
 from spikingjelly.datasets.cifar10_dvs import CIFAR10DVS
 from spikingjelly.datasets.dvs128_gesture import DVS128Gesture
-
+from spikingjelly.datasets.n_caltech101 import NCaltech101
+from spikingjelly.activation_based.neuron import LIFNode, ParametricLIFNode
 import torch
 import torch.nn as nn
+import torchvision.utils
+import torchvision.transforms as transforms
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
-from torchvision import transforms
-
-from timm.data import create_dataset, create_loader, resolve_data_config
+import torchinfo
+from timm.data import (
+    create_dataset,
+    create_loader,
+    resolve_data_config,
+    Mixup,
+    FastCollateMixup,
+    AugMixDataset,
+)
 from timm.models import (
     create_model,
     safe_model_name,
     resume_checkpoint,
     load_checkpoint,
-    convert_splitbn_model,
+    model_parameters,
 )
+try:
+    from timm.models import clean_state_dict
+except Exception:
+    # Backward compatibility for older timm versions
+    from timm.models.helpers import clean_state_dict
 from timm.utils import *
+from timm.loss import (
+    LabelSmoothingCrossEntropy,
+    SoftTargetCrossEntropy,
+    JsdCrossEntropy,
+    BinaryCrossEntropy,
+)
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler
 from timm.utils import ApexScaler, NativeScaler
-import model, dvs_utils
-from module.ms_conv import Top2Gating
-from timm.models.helpers import clean_state_dict
+import model, dvs_utils, criterion
 
-
-def resume_checkpoint(
-    model, checkpoint_path, optimizer=None, loss_scaler=None, log_info=True
-):
-    """Same as train.py's resume_checkpoint: strict=False + clean_state_dict."""
-    resume_epoch = None
-    if os.path.isfile(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
-        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-            if log_info:
-                _logger.info("Restoring model state from checkpoint...")
-            state_dict = clean_state_dict(checkpoint["state_dict"])
-            result = model.load_state_dict(state_dict, strict=False)
-            if log_info and (result.missing_keys or result.unexpected_keys):
-                _logger.warning(f"Missing keys:    {result.missing_keys}")
-                _logger.warning(f"Unexpected keys:  {result.unexpected_keys}")
-
-            if "epoch" in checkpoint:
-                resume_epoch = checkpoint["epoch"]
-                if "version" in checkpoint and checkpoint["version"] > 1:
-                    resume_epoch += 1
-
-            if log_info:
-                _logger.info(
-                    "Loaded checkpoint '{}' (epoch {})".format(
-                        checkpoint_path, checkpoint["epoch"]
-                    )
-                )
-        else:
-            model.load_state_dict(checkpoint)
-            if log_info:
-                _logger.info("Loaded checkpoint '{}'".format(checkpoint_path))
-        return resume_epoch
-    else:
-        _logger.error("No checkpoint found at '{}'".format(checkpoint_path))
-        raise FileNotFoundError()
+try:
+    # `convert_splitbn_model` was removed in newer timm versions; provide a no-op fallback.
+    from timm.models import convert_splitbn_model  # type: ignore[attr-defined]
+except Exception:
+    def convert_splitbn_model(m, *args, **kwargs):
+        return m
 
 try:
     from apex import amp
@@ -93,9 +82,51 @@ try:
 except ImportError:
     has_wandb = False
 
-torch.backends.cudnn.benchmark = False
-torch.backends.cudnn.deterministic = True
 
+def resume_checkpoint(
+    model, checkpoint_path, optimizer=None, loss_scaler=None, log_info=True
+):
+    resume_epoch = None
+    if os.path.isfile(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            if log_info:
+                _logger.info("Restoring model state from checkpoint...")
+            state_dict = clean_state_dict(checkpoint["state_dict"])
+            model.load_state_dict(state_dict, strict=False)
+
+            if optimizer is not None and "optimizer" in checkpoint:
+                if log_info:
+                    _logger.info("Restoring optimizer state from checkpoint...")
+                optimizer.load_state_dict(checkpoint["optimizer"])
+
+            if loss_scaler is not None and loss_scaler.state_dict_key in checkpoint:
+                if log_info:
+                    _logger.info("Restoring AMP loss scaler state from checkpoint...")
+                loss_scaler.load_state_dict(checkpoint[loss_scaler.state_dict_key])
+
+            if "epoch" in checkpoint:
+                resume_epoch = checkpoint["epoch"]
+                if "version" in checkpoint and checkpoint["version"] > 1:
+                    resume_epoch += 1  # start at the next epoch, old checkpoints incremented before save
+
+            if log_info:
+                _logger.info(
+                    "Loaded checkpoint '{}' (epoch {})".format(
+                        checkpoint_path, checkpoint["epoch"]
+                    )
+                )
+        else:
+            model.load_state_dict(checkpoint)
+            if log_info:
+                _logger.info("Loaded checkpoint '{}'".format(checkpoint_path))
+        return resume_epoch
+    else:
+        _logger.error("No checkpoint found at '{}'".format(checkpoint_path))
+        raise FileNotFoundError()
+    
+    
+torch.backends.cudnn.benchmark = True
 # The first arg parser parses out only the --config argument, this argument is used to
 # load a yaml file containing key-values that override the defaults for the main parser below
 config_parser = parser = argparse.ArgumentParser(
@@ -139,14 +170,21 @@ parser.add_argument(
     help="dataset validation split (default: validation)",
 )
 parser.add_argument(
-    "--model",
-    default="spikeformer",
+    "--train-split-path",
     type=str,
-    metavar="MODEL",
-    help='Name of model to train (default: "countception")',
+    default=None,
+    metavar="N",
+    help="",
 )
 parser.add_argument(
-    "--pooling_stat",
+    "--model",
+    default="sdt",
+    type=str,
+    metavar="MODEL",
+    help='Name of model to train (default: "sdt")',
+)
+parser.add_argument(
+    "--pooling-stat",
     default="1111",
     type=str,
     help="pooling layers in SPS moduls",
@@ -254,7 +292,12 @@ parser.add_argument(
 parser.add_argument(
     "--expert-timesteps",
     default=None,
-    help="MoE expert timesteps per expert (from config: list of int). None = use default.",
+    help="MoE expert timesteps per expert (from config: list of int, e.g. [4, 1, 1, 1]). None = use default.",
+)
+parser.add_argument(
+    "--only-expert-ids",
+    default=None,
+    help="Optional expert-id whitelist for MoE routing/pruning (e.g. [0] or [0,1]). None disables pruning.",
 )
 parser.add_argument(
     "--gp",
@@ -324,6 +367,21 @@ parser.add_argument(
     metavar="N",
     help="input val batch size for training (default: 32)",
 )
+
+############# Routing Loss ##################
+
+# parser.add_argument(
+#     "--spatial-start-epoch",
+#     type=int,
+#     default=130,
+#     help="Number of epochs to linearly warmup the spatial loss coefficient",
+# )
+# parser.add_argument(
+#     "--spatial-loss-coef",
+#     type=float,
+#     default=0.001,
+#     help="Maximum spatial loss coefficient after warmup",
+# )
 
 # Optimizer parameters
 parser.add_argument(
@@ -690,7 +748,11 @@ parser.add_argument(
     action="store_true",
     help="Enable separate BN layers per augmentation split.",
 )
-
+parser.add_argument(
+    "--linear-prob",
+    action="store_true",
+    help="",
+)
 # Model Exponential Moving Average
 parser.add_argument(
     "--model-ema",
@@ -799,51 +861,6 @@ parser.add_argument(
     help="disable fast prefetcher",
 )
 parser.add_argument(
-    "--save-qkv",
-    action="store_true",
-    default=False,
-    help="disable fast prefetcher",
-)
-parser.add_argument(
-    "--print-moe",
-    action="store_true",
-    default=False,
-    help="print MoE expert routing summary during inference",
-)
-parser.add_argument(
-    "--print-moe-batches",
-    type=int,
-    default=1,
-    metavar="N",
-    help="number of batches to print MoE routing (default: 1)",
-)
-parser.add_argument(
-    "--print-moe-detail",
-    action="store_true",
-    default=False,
-    help="print per-token MoE routing with full softmax distribution",
-)
-parser.add_argument(
-    "--print-moe-max-tokens",
-    type=int,
-    default=None,
-    metavar="N",
-    help="max tokens to print per module (default: all tokens)",
-)
-parser.add_argument(
-    "--max-batches",
-    type=int,
-    default=None,
-    metavar="N",
-    help="limit number of validation batches (default: all)",
-)
-parser.add_argument(
-    "--first-sample-only",
-    action="store_true",
-    default=False,
-    help="use only the first sample in each batch (index 0)",
-)
-parser.add_argument(
     "--output",
     default="./output",
     type=str,
@@ -871,15 +888,9 @@ parser.add_argument(
     metavar="N",
     help="Test/inference time augmentation (oversampling) factor. 0=None (default: 0)",
 )
-parser.add_argument("--local_rank", default=0, type=int)
+parser.add_argument("--local-rank", default=0, type=int)
 parser.add_argument(
     "--use-multi-epochs-loader",
-    action="store_true",
-    default=False,
-    help="use the multi-epochs-loader to save time at the beginning of every epoch",
-)
-parser.add_argument(
-    "--large-valid",
     action="store_true",
     default=False,
     help="use the multi-epochs-loader to save time at the beginning of every epoch",
@@ -897,7 +908,7 @@ parser.add_argument(
     help="log training and validation metrics to wandb",
 )
 
-_logger = logging.getLogger("valid")
+_logger = logging.getLogger("train")
 stream_handler = logging.StreamHandler()
 format_str = "%(asctime)s %(levelname)s: %(message)s"
 stream_handler.setFormatter(logging.Formatter(format_str))
@@ -922,9 +933,37 @@ def _parse_args():
     return args, args_text
 
 
+def _normalize_only_expert_ids(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [int(v) for v in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "" or stripped.lower() == "none":
+            return None
+        parsed = ast.literal_eval(stripped)
+        if isinstance(parsed, (list, tuple)):
+            return [int(v) for v in parsed]
+        return [int(parsed)]
+    return [int(value)]
+
+
 def main():
     setup_default_logging()
     args, args_text = _parse_args()
+    args.only_expert_ids = _normalize_only_expert_ids(
+        getattr(args, "only_expert_ids", None)
+    )
+
+    if args.log_wandb:
+        if has_wandb:
+            wandb.init(project=args.experiment, config=args)
+        else:
+            _logger.warning(
+                "You've requested to log metrics to wandb but package not found. "
+                "Metrics not being logged to wandb, try `pip install wandb`"
+            )
 
     args.prefetcher = not args.no_prefetcher
     args.distributed = False
@@ -933,11 +972,12 @@ def main():
     args.device = "cuda:1"
     args.world_size = 1
     args.rank = 0  # global rank
-    if args.output is None:
-        args.output = "./output"
     if args.distributed:
+        args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         args.device = "cuda:%d" % args.local_rank
         torch.cuda.set_device(args.local_rank)
+        # args.device = "cuda:%d" % args.local_rank
+        # torch.cuda.set_device(args.local_rank)
         torch.distributed.init_process_group(backend="nccl", init_method="env://")
         args.world_size = torch.distributed.get_world_size()
         args.rank = torch.distributed.get_rank()
@@ -967,6 +1007,7 @@ def main():
             "Install NVIDA apex or upgrade to PyTorch 1.6"
         )
 
+    # torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.benchmark = True
     os.environ["PYTHONHASHSEED"] = str(args.seed)
     np.random.seed(args.seed)
@@ -975,9 +1016,12 @@ def main():
     torch.cuda.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     random_seed(args.seed, args.rank)
+    
+    torch.backends.cudnn.deterministic = True
+    rd.seed(args.seed)
 
     args.dvs_mode = False
-    if args.dataset in ["cifar10-dvs-tet", "cifar10-dvs"]:
+    if args.dataset in ["cifar10-dvs-tet", "cifar10-dvs", "ncaltech101"]:
         args.dvs_mode = True
 
     model = create_model(
@@ -1005,492 +1049,44 @@ def main():
         dvs_mode=args.dvs_mode,
         TET=args.TET,
     )
+    for module in model.modules():
+        if hasattr(module, "only_expert_ids"):
+            module.only_expert_ids = args.only_expert_ids
     if args.local_rank == 0:
-        _logger.info("Creating model")
-        n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        _logger.info(f"number of params: {n_parameters}")
-
-    if args.num_classes is None:
-        assert hasattr(
-            model, "num_classes"
-        ), "Model must have `num_classes` attr if not set on cmd line/config."
-        args.num_classes = (
-            model.num_classes
-        )  # FIXME handle model default vs config num_classes more elegantly
-
-    if args.local_rank == 0:
-        _logger.info(
-            f"Model {safe_model_name(args.model)} created, param count:{sum([m.numel() for m in model.parameters()])}"
-        )
-
-    data_config = resolve_data_config(
-        vars(args), model=model, verbose=args.local_rank == 0
-    )
-
-    # setup augmentation batch splits for contrastive loss or split bn
-    num_aug_splits = 0
-    if args.aug_splits > 0:
-        assert args.aug_splits > 1, "A split of 1 makes no sense"
-        num_aug_splits = args.aug_splits
-
-    # enable split bn (separate bn stats per batch-portion)
-    if args.split_bn:
-        assert num_aug_splits > 1 or args.resplit
-        model = convert_splitbn_model(model, max(num_aug_splits, 2))
-
-    # move model to GPU, enable channels last layout if set
-    model.cuda()
-    if args.channels_last:
-        model = model.to(memory_format=torch.channels_last)
-
-    # setup synchronized BatchNorm for distributed training
-    if args.distributed and args.sync_bn:
-        assert not args.split_bn
-        if has_apex and use_amp != "native":
-            # Apex SyncBN preferred unless native amp is activated
-            model = convert_syncbn_model(model)
-        else:
-            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        if args.local_rank == 0:
-            _logger.info(
-                "Converted model to use Synchronized BatchNorm. WARNING: You may have issues if using "
-                "zero initialized BN layers (enabled by default for ResNets) while sync-bn enabled."
-            )
-
-    if args.torchscript:
-        assert not use_amp == "apex", "Cannot use APEX AMP with torchscripted model"
-        assert not args.sync_bn, "Cannot use SyncBatchNorm with torchscripted model"
-        model = torch.jit.script(model)
-
-    # setup automatic mixed-precision (AMP) loss scaling and op casting
-    amp_autocast = suppress  # do nothing
-    loss_scaler = None
-    if use_amp == "apex":
-        model, optimizer = amp.initialize(model, optimizer, opt_level="O1")
-        loss_scaler = ApexScaler()
-        if args.local_rank == 0:
-            _logger.info("Using NVIDIA APEX AMP. Training in mixed precision.")
-    elif use_amp == "native":
-        amp_autocast = torch.cuda.amp.autocast
-        loss_scaler = NativeScaler()
-        if args.local_rank == 0:
-            _logger.info("Using native Torch AMP. Training in mixed precision.")
-    else:
-        if args.local_rank == 0:
-            _logger.info("AMP not enabled. Training in float32.")
-
-    # optionally resume from a checkpoint
-    if args.resume:
-        resume_checkpoint(
-            model,
-            args.resume,
-            optimizer=None if args.no_resume_opt else optimizer,
-            loss_scaler=None if args.no_resume_opt else loss_scaler,
-            log_info=args.local_rank == 0,
-        )
-
-    # setup exponential moving average of model weights, SWA could be used here too
-    model_ema = None
-    if args.model_ema:
-        # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP wrapper
-        model_ema = ModelEmaV2(
-            model,
-            decay=args.model_ema_decay,
-            device="cpu" if args.model_ema_force_cpu else None,
-        )
-        if args.resume:
-            load_checkpoint(model_ema.module, args.resume, use_ema=True)
-
-    if args.distributed:
-        if has_apex and use_amp != "native":
-            # Apex DDP preferred unless native amp is activated
-            if args.local_rank == 0:
-                _logger.info("Using NVIDIA APEX DistributedDataParallel.")
-            model = ApexDDP(model, delay_allreduce=True, find_unused_parameters=True)
-        else:
-            if args.local_rank == 0:
-                _logger.info("Using native Torch DistributedDataParallel.")
-            model = NativeDDP(
-                model, device_ids=[args.local_rank], find_unused_parameters=True
-            )  # can use device str in Torch >= 1.1
-        # NOTE: EMA model does not need to be wrapped by DDP
-
-    # create the train and eval datasets
-    dataset_eval = None, None
-    if args.dataset == "cifar10-dvs-tet":
-        dataset_eval = dvs_utils.DVSCifar10(
-            root=os.path.join(args.data_dir, "test"),
-            train=False,
-        )
-    elif args.dataset == "cifar10-dvs":
-        dataset = CIFAR10DVS(
-            args.data_dir,
-            data_type="frame",
-            frames_number=args.time_steps,
-            split_by="number",
-            transform=dvs_utils.Resize(64), 
-        )
-        _, dataset_eval = dvs_utils.split_to_train_test_set(0.9, dataset, 10)
-    elif args.dataset == "gesture":
-        dataset_eval = DVS128Gesture(
-            args.data_dir,
-            train=False,
-            data_type="frame",
-            frames_number=args.time_steps,
-            split_by="number",
-        )
-    else:
-        dataset_eval = create_dataset(
-            args.dataset,
-            root=args.data_dir,
-            split=args.val_split,
-            is_training=False,
-            batch_size=args.batch_size,
-            # download=True,
-        )
-
-    loader_eval = None
-    if args.dataset in dvs_utils.DVS_DATASET:
-        loader_eval = torch.utils.data.DataLoader(
-            dataset_eval,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=args.workers,
-            pin_memory=True,
-        )
-    elif args.dataset == "imagenet" and args.large_valid:
-        dataset_eval.transform = transforms.Compose(
-            [
-                transforms.Resize(320),
-                transforms.CenterCrop(288),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=data_config["mean"], std=data_config["std"]),
-            ]
-        )
-        sampler = torch.utils.data.distributed.DistributedSampler(dataset_eval)
-        loader_eval = torch.utils.data.DataLoader(
-            dataset_eval,
-            batch_size=args.val_batch_size,
-            num_workers=args.workers,
-            sampler=sampler,
-            pin_memory=args.pin_mem,
-            drop_last=False,
-        )
-    else:
-        loader_eval = create_loader(
-            dataset_eval,
-            input_size=data_config["input_size"],
-            batch_size=args.val_batch_size,
-            is_training=False,
-            use_prefetcher=args.prefetcher,
-            interpolation=data_config["interpolation"],
-            mean=data_config["mean"],
-            std=data_config["std"],
-            num_workers=args.workers,
-            distributed=args.distributed,
-            crop_pct=data_config["crop_pct"],
-            pin_memory=args.pin_mem,
-        )
-
-    validate_loss_fn = nn.CrossEntropyLoss().cuda()
-
-    # setup checkpoint saver and eval metric tracking
-    if args.experiment:
-        exp_name = args.experiment
-    else:
-        exp_name = "-".join(
-            [
-                datetime.now().strftime("%Y%m%d-%H%M%S"),
-                safe_model_name(args.model),
-                "data-" + args.dataset.split("/")[-1],
-                f"t-{args.time_steps}",
-                f"spike-{args.spike_mode}",
-            ]
-        )
-    output_dir = get_outdir(args.output if args.output else "./output/valid", exp_name)
-    if args.rank == 0:
-        file_handler = logging.FileHandler(
-            os.path.join(output_dir, f"{args.model}.log"), "w"
-        )
-        file_handler.setFormatter(logging.Formatter(format_str))
-        file_handler.setLevel(logging.INFO)
-        _logger.addHandler(file_handler)
-
-    try:
-        if args.distributed and args.dist_bn in ("broadcast", "reduce"):
-            if args.local_rank == 0:
-                _logger.info("Distributing BatchNorm running means and vars")
-            distribute_bn(model, args.world_size, args.dist_bn == "reduce")
-
-        # Run validation TWICE to check consistency
-        for run_idx in range(2):
-            _logger.info(f"\n{'='*50}")
-            _logger.info(f"VALIDATION RUN {run_idx + 1}")
-            _logger.info(f"{'='*50}")
-
-            eval_metrics = validate(
-                model,
-                loader_eval,
-                validate_loss_fn,
-                args,
-                output_dir=output_dir,
-                amp_autocast=amp_autocast,
-            )
-            if args.local_rank == 0:
-                _logger.info("Run %d - top-1: %s", run_idx + 1, eval_metrics["top1"])
-
-        if model_ema is not None and not args.model_ema_force_cpu:
-            if args.distributed and args.dist_bn in ("broadcast", "reduce"):
-                distribute_bn(model_ema, args.world_size, args.dist_bn == "reduce")
-    except KeyboardInterrupt:
-        pass
-
-
-def validate(
-    model, loader, loss_fn, args, output_dir=None, amp_autocast=suppress, log_suffix=""
-):
-    batch_time_m = AverageMeter()
-    losses_m = AverageMeter()
-    top1_m = AverageMeter()
-    top5_m = AverageMeter()
-
-    def calc_non_zero_rate(s_dict, nz_dict, idx, t):
-        for k, v_ in s_dict.items():
-            if v_.dim() < 1 or t >= v_.shape[0]:
-                continue  # skip scalars (e.g. moe_loss) and short timesteps
-            v = v_[t, ...]
-            x_shape = torch.tensor(list(v.shape))
-            all_neural = torch.prod(x_shape)
-            z = torch.nonzero(v)
-            if k in nz_dict.keys():
-                nz_dict[k] += (z.shape[0] / all_neural).item() / idx
-            else:
-                nz_dict[k] = (z.shape[0] / all_neural).item() / idx
-        return nz_dict
-
-    def calc_firing_rate(s_dict, fr_dict, idx, t):
-        for k, v_ in s_dict.items():
-            if v_.dim() < 1 or t >= v_.shape[0]:
-                continue  # skip scalars (e.g. moe_loss) and short timesteps
-            v = v_[t, ...]
-            if k in fr_dict.keys():
-                fr_dict[k] += v.mean().item() / idx
-            else:
-                fr_dict[k] = v.mean().item() / idx
-        return fr_dict
-
-    def log_moe_routing(batch_idx):
-        # Local import to avoid NameError if module import is stripped in some environments
-        from module.ms_conv import Top2Gating
-        if not args.print_moe or args.local_rank != 0:
-            return
-        if args.print_moe_batches is not None and batch_idx >= args.print_moe_batches:
-            return
-        for name, module in model.named_modules():
-            if not isinstance(module, Top2Gating):
-                continue
-            if module.last_masks is None:
-                continue
-            for k, mask in enumerate(module.last_masks):
-                # mask: (B, N, E) -> counts per expert
-                counts = (
-                    mask.sum(dim=(0, 1)).to(torch.int64).detach().cpu().tolist()
-                )
-                print(f"[batch {batch_idx}] {name} top{k + 1} counts: {counts}")
-            if args.print_moe_detail and module.last_raw_gates is not None:
-                probs = module.last_raw_gates.detach().cpu()  # (B, N, E)
-                indices = module.last_indices
-                if indices is not None:
-                    indices = [idx.detach().cpu() for idx in indices]
-                B, N, E = probs.shape
-                max_tokens = args.print_moe_max_tokens
-                token_idx = 0
-                for b in range(B):
-                    for n in range(N):
-                        if max_tokens is not None and token_idx >= max_tokens:
-                            return
-                        token_idx += 1
-                        topk = []
-                        if indices is not None:
-                            for k, idx in enumerate(indices):
-                                topk.append(
-                                    {
-                                        "k": k + 1,
-                                        "expert": int(idx[b, n].item()),
-                                        "prob": float(probs[b, n, idx[b, n]].item()),
-                                    }
-                                )
-                        print(
-                            f"[batch {batch_idx}] {name} token b{b} n{n} topk={topk} probs={probs[b, n].tolist()}"
-                        )
-
-    model.eval()
-
-    # ── Per-expert firing rate hooks ─────────────────────────────────────────
-    # The model's internal hook dict assigns the same key to every expert
-    # (all default to layer=0), so only the last expert's spikes survive.
-    # register_forward_hook gives each expert a unique path-based key:
-    #   "block{b}_expert{e}_{sublayer}"  e.g. "block0_expert2_fc1_lif"
-    _captured_expert = {}
-
-    def _make_expert_hook(label):
-        def _hook(module, inp, out):
-            _captured_expert[label] = out.detach()
-        return _hook
-
-    _expert_hook_handles = []
-    for _name, _module in model.named_modules():
-        if 'mlp.experts.' not in _name:
-            continue
-        if not (_name.endswith('fc1_lif') or _name.endswith('fc2_lif')):
-            continue
-        # Works for both plain ("block.0.mlp.experts.2.fc1_lif")
-        # and DDP-wrapped ("module.block.0.mlp.experts.2.fc1_lif") names.
-        _parts = _name.split('.')
-        _label = f"block{_parts[-5]}_expert{_parts[-2]}_{_parts[-1]}"
-        _expert_hook_handles.append(
-            _module.register_forward_hook(_make_expert_hook(_label))
-        )
-    # ─────────────────────────────────────────────────────────────────────────
-
-    end = time.time()
-    max_batches = args.max_batches
-    if max_batches is None:
-        last_idx = len(loader) - 1
-    else:
-        last_idx = min(len(loader), max_batches) - 1
+        _logger.info(f"Creating model {args.model}")
+        _logger.info(f"MoE only_expert_ids: {args.only_expert_ids}")
+        # _logger.info(
+        #     str(
+        #         torchinfo.summary(
+        #             model, (1, args.in_channels, args.img_size, args.img_size), depth=10
+        #         )
+        #     )
+        # )
     
-    fr_dict = {f"t{t}": dict() for t in range(args.time_steps)}
-    nz_dict = {f"t{t}": dict() for t in range(args.time_steps)}
-    # fr_dict, nz_dict = {"t0": dict(), "t1": dict(), "t2": dict(), "t3": dict()}, {
-    #     "t0": dict(),
-    #     "t1": dict(),
-    #     "t2": dict(),
-    #     "t3": dict(),
-    # }
-    with torch.no_grad():
-        for batch_idx, (input, target) in enumerate(loader):
-            if max_batches is not None and batch_idx >= max_batches:
-                break
-            functional.reset_net(model)  # Reset neuron states BEFORE each batch
-            last_batch = batch_idx == last_idx
-            # input = input.float()  # Ensure float32 like train.py
-            ## modified for dvs gesture
-            input = input.float()
-            if not args.prefetcher or args.dataset in dvs_utils.DVS_DATASET:
-                if args.amp and not isinstance(input, torch.cuda.HalfTensor):
-                    input = input.half()
-                input, target = input.cuda(), target.cuda()
-            else:
-                target = target.cuda()
-            if args.channels_last:
-                input = input.contiguous(memory_format=torch.channels_last)
-            if args.first_sample_only:
-                input = input[:1]
-                target = target[:1]
-
-            with amp_autocast():
-                output, firing_dict = model(input, hook=dict())
-                firing_dict.update(_captured_expert)  # merge per-expert spikes
-                if args.save_qkv and args.local_rank == 0:
-                    torch.save(
-                        firing_dict, os.path.join(output_dir, f"qkv_{batch_idx}.pkl")
-                    )
-                log_moe_routing(batch_idx)
-
-            for t in range(args.time_steps):
-                fr_single_dict = calc_firing_rate(
-                    firing_dict, fr_dict["t" + str(t)], last_idx, t
-                )
-                fr_dict["t" + str(t)] = fr_single_dict
-                nz_single_dict = calc_non_zero_rate(
-                    firing_dict, nz_dict["t" + str(t)], last_idx, t
-                )
-                nz_dict["t" + str(t)] = nz_single_dict
-
-            # augmentation reduction
-            reduce_factor = args.tta
-            if reduce_factor > 1:
-                output = output.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
-                target = target[0 : target.size(0) : reduce_factor]
-            
-            if args.TET:
-                output = output.mean(0)
-
-            loss = loss_fn(output, target)
-            functional.reset_net(model)
-
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-
-            if args.distributed:
-                reduced_loss = reduce_tensor(loss.data, args.world_size)
-                acc1 = reduce_tensor(acc1, args.world_size)
-                acc5 = reduce_tensor(acc5, args.world_size)
-            else:
-                reduced_loss = loss.data
-
-            torch.cuda.synchronize()
-
-            losses_m.update(reduced_loss.item(), input.size(0))
-            top1_m.update(acc1.item(), output.size(0))
-            top5_m.update(acc5.item(), output.size(0))
-
-            batch_time_m.update(time.time() - end)
-            end = time.time()
-            if args.local_rank == 0 and (
-                last_batch or batch_idx % args.log_interval == 0
-            ):
-                log_name = "Test" + log_suffix
-                _logger.info(
-                    "{0}: [{1:>4d}/{2}]  "
-                    "Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  "
-                    "Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  "
-                    "Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  "
-                    "Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})".format(
-                        log_name,
-                        batch_idx,
-                        last_idx,
-                        batch_time=batch_time_m,
-                        loss=losses_m,
-                        top1=top1_m,
-                        top5=top5_m,
-                    )
-                )
-
-    for _h in _expert_hook_handles:
-        _h.remove()
-
-    # Print firing rates per timestep: other layers first, then per-expert
-    if args.local_rank == 0:
-        _other_keys = sorted(k for k in fr_dict["t0"] if "_expert" not in k)
-        _expert_keys = sorted(k for k in fr_dict["t0"] if "_expert" in k)
-
-        _logger.info("=== Layer Firing Rates (averaged over dataset) ===")
-        for t in range(args.time_steps):
-            _logger.info("  [t=%d]", t)
-            for _key in _other_keys:
-                _rate = fr_dict[f"t{t}"].get(_key, float("nan"))
-                _logger.info("    %s: %.4f", _key, _rate)
-
-        _logger.info("=== Per-Expert Firing Rates (averaged over dataset) ===")
-        for t in range(args.time_steps):
-            _logger.info("  [t=%d]", t)
-            for _key in _expert_keys:
-                _rate = fr_dict[f"t{t}"].get(_key, float("nan"))
-                _logger.info("    %s: %.4f", _key, _rate)
-
-    metrics = OrderedDict(
-        [
-            ("loss", losses_m.avg),
-            ("top1", top1_m.avg),
-            ("top5", top5_m.avg),
-            ("non_zero", nz_dict),
-            ("firing_rate", fr_dict),
-        ]
-    )
-
-    return metrics
-
+    functional.reset_net(model)
+    timestep = model.T
+    token_count_onedir = 16 #for dvsgesture
+    # token_count_onedir = 8 #for cifar100
+    colcol = ["num_params", "output_size", "mult_adds"]
+    
+    # [4, 1, 512, 8, 8] torch.randn(timestep, 1, 512, 8, 8)
+    torchinfo.summary(model, (1, args.in_channels, args.img_size, args.img_size), col_names=colcol, depth=5)
+    torchinfo.summary(model.patch_embed, (timestep, 1, args.in_channels, args.img_size, args.img_size), col_names=colcol)
+    torchinfo.summary(model.block[0], (timestep, 1, args.dim, token_count_onedir, token_count_onedir), col_names=colcol)
+    torchinfo.summary(model.block[0].attn, (timestep, 1, args.dim, token_count_onedir, token_count_onedir), col_names=colcol)
+    torchinfo.summary(model.block[0].mlp, (timestep, 1, args.dim, token_count_onedir, token_count_onedir), col_names=colcol)
+    torchinfo.summary(model.block[0].mlp.gate, (timestep, 1, args.dim, token_count_onedir, token_count_onedir), col_names=colcol)
+    torchinfo.summary(model.block[0].mlp.experts[0], (timestep, 1, args.dim, token_count_onedir, token_count_onedir), col_names=colcol)
+    torchinfo.summary(model.block[0].mlp.experts[1], (1, 1, args.dim, token_count_onedir, token_count_onedir), col_names=colcol)
+    
+    # torchinfo.summary(model.block[0], (timestep, 1, 512, 8, 8), col_names=colcol)
+    # torchinfo.summary(model.block[0].attn, (timestep, 1, 512, 8, 8), col_names=colcol)
+    # torchinfo.summary(model.block[0].mlp, (timestep, 1, 512, 8, 8), col_names=colcol)
+    # torchinfo.summary(model.block[0].mlp.gate, (timestep, 1, 512, 8, 8), col_names=colcol)
+    # torchinfo.summary(model.block[0].mlp.experts[0], (timestep, 1, 512, 8, 8), col_names=colcol)
+    # torchinfo.summary(model.block[0].mlp.experts[1], (1, 1, 512, 8, 8), col_names=colcol)
+    functional.reset_net(model)
+    print('hello')
 
 if __name__ == "__main__":
     main()

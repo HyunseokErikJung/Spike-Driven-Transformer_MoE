@@ -365,10 +365,10 @@ class Top2Gating(nn.Module):
         # Initialized small (std=0.02 from _init_weights) so router starts ≈ pure linear.
         # self.gate_spatial = nn.Conv2d(dim, dim, kernel_size=3, padding=1, bias=False, groups=dim)
         # Linear router: per-token projection to expert logits
-        self.w_gating = nn.Parameter(torch.randn(dim, num_gates))
+        # self.w_gating = nn.Parameter(torch.randn(dim, num_gates))
 
         # Two-layer router MLP: (B, N, C) -> (B, N, E) # originally 512
-        router_hidden = dim
+        # router_hidden = dim
         # self.w_gating = nn.Sequential(
         #     nn.Linear(dim, router_hidden, bias=False),
         #     GELU(),
@@ -464,7 +464,7 @@ class Top2Gating(nn.Module):
         x_gate = x.flatten(3).permute(0, 1, 3, 2).contiguous()  # T, B, N, C
         x_gate = self.gate_fc1(x_gate)         # (T, B, N, router_hidden)
         # x_pooled = x_gate.mean(dim=0)  # B, N, C
-        x_pooled = x_gate[0] ##################################################### DONG: CHECK THIS. only using first timestep!!
+        x_pooled = x_gate[0] ##################################################### TODO: (DONG) CHECK THIS. only using first timestep!!
 
         raw_gates = x_pooled.softmax(dim = -1)
 
@@ -663,7 +663,7 @@ class MoE(nn.Module):
         # # None keeps all experts (default behavior).
 
 
-        self.only_expert_ids = None
+        self.only_expert_ids = None #TODO: (DONG) 현재 상위 스크립트에서 덮어씌워지는 방식으로 코딩됨;;; 추후 수정 필요.
         ############# For Pruning #################
 
 
@@ -691,6 +691,7 @@ class MoE(nn.Module):
 
         ############# For Pruning ######################
         # Keep only selected expert routes (others become zero contribution).
+        # print(self.only_expert_ids)
         if self.only_expert_ids is not None:
             keep = torch.zeros((1, 1, E, 1), device=combine_tensor.device, dtype=combine_tensor.dtype)
             keep_ids = [eid for eid in self.only_expert_ids if 0 <= eid < E]
@@ -699,6 +700,7 @@ class MoE(nn.Module):
             dispatch_tensor = dispatch_tensor * keep
             combine_tensor = combine_tensor * keep
             selected_expert_ids = set(keep_ids)
+
         else:
             selected_expert_ids = None
 

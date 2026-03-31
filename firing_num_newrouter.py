@@ -1,4 +1,5 @@
 import argparse
+import ast
 import time
 import yaml
 import json
@@ -23,7 +24,6 @@ from timm.models import (
     safe_model_name,
     resume_checkpoint,
     load_checkpoint,
-    convert_splitbn_model,
 )
 from timm.utils import *
 from timm.optim import create_optimizer_v2, optimizer_kwargs
@@ -31,7 +31,17 @@ from timm.scheduler import create_scheduler
 from timm.utils import ApexScaler, NativeScaler
 import model, dvs_utils
 from module.ms_conv import Top2Gating
-from timm.models.helpers import clean_state_dict
+try:
+    from timm.models import clean_state_dict  # type: ignore[attr-defined]
+except Exception:
+    from timm.models.helpers import clean_state_dict
+
+try:
+    # `convert_splitbn_model` was removed in newer timm versions; keep compatibility
+    from timm.models import convert_splitbn_model  # type: ignore[attr-defined]
+except Exception:
+    def convert_splitbn_model(m, *args, **kwargs):
+        return m
 
 
 def resume_checkpoint(
@@ -40,7 +50,7 @@ def resume_checkpoint(
     """Same as train.py's resume_checkpoint: strict=False + clean_state_dict."""
     resume_epoch = None
     if os.path.isfile(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
             if log_info:
                 _logger.info("Restoring model state from checkpoint...")
@@ -140,7 +150,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--model",
-    default="spikeformer",
+    default="sdt",
     type=str,
     metavar="MODEL",
     help='Name of model to train (default: "countception")',
@@ -174,6 +184,36 @@ parser.add_argument(
     default="lif",
     type=str,
     help="",
+)
+parser.add_argument(
+    "--attn-mode",
+    default="direct_xor",
+    type=str,
+    help="attention mode (passed to SpikeDrivenTransformer.attn_mode)",
+)
+parser.add_argument(
+    "--backend",
+    default="triton",
+    type=str,
+    help="backend for SNN/LIF nodes (passed to SpikeDrivenTransformer.backend)",
+)
+parser.add_argument(
+    "--get-embed",
+    action="store_true",
+    default=False,
+    help="whether to return embeddings from model (passed to get_embed)",
+)
+parser.add_argument(
+    "--cml",
+    action="store_true",
+    default=False,
+    help="enable CML mode (passed to SpikeDrivenTransformer.cml)",
+)
+parser.add_argument(
+    "--cache-dir",
+    default=None,
+    type=str,
+    help="cache directory (passed to SpikeDrivenTransformer.cache_dir)",
 )
 parser.add_argument(
     "--layer",
@@ -255,6 +295,11 @@ parser.add_argument(
     "--expert-timesteps",
     default=None,
     help="MoE expert timesteps per expert (from config: list of int). None = use default.",
+)
+parser.add_argument(
+    "--only-expert-ids",
+    default=None,
+    help="Optional expert-id whitelist for MoE routing/pruning (e.g. [0] or [0,1]). None disables pruning.",
 )
 parser.add_argument(
     "--gp",
@@ -922,9 +967,28 @@ def _parse_args():
     return args, args_text
 
 
+def _normalize_only_expert_ids(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [int(v) for v in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "" or stripped.lower() == "none":
+            return None
+        parsed = ast.literal_eval(stripped)
+        if isinstance(parsed, (list, tuple)):
+            return [int(v) for v in parsed]
+        return [int(parsed)]
+    return [int(value)]
+
+
 def main():
     setup_default_logging()
     args, args_text = _parse_args()
+    args.only_expert_ids = _normalize_only_expert_ids(
+        getattr(args, "only_expert_ids", None)
+    )
 
     args.prefetcher = not args.no_prefetcher
     args.distributed = False
@@ -1001,14 +1065,23 @@ def main():
         qkv_bias=False,
         depths=args.layer,
         sr_ratios=1,
+        attn_mode=args.attn_mode,
         spike_mode=args.spike_mode,
+        backend=args.backend,
+        get_embed=args.get_embed,
+        cml=args.cml,
+        cache_dir=args.cache_dir,
         dvs_mode=args.dvs_mode,
         TET=args.TET,
     )
+    for module in model.modules():
+        if hasattr(module, "only_expert_ids"):
+            module.only_expert_ids = args.only_expert_ids
     if args.local_rank == 0:
         _logger.info("Creating model")
         n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
         _logger.info(f"number of params: {n_parameters}")
+        _logger.info(f"MoE only_expert_ids: {args.only_expert_ids}")
 
     if args.num_classes is None:
         assert hasattr(
