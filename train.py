@@ -888,7 +888,14 @@ parser.add_argument(
     metavar="N",
     help="Test/inference time augmentation (oversampling) factor. 0=None (default: 0)",
 )
-parser.add_argument("--local-rank", default=0, type=int)
+parser.add_argument(
+    "--local-rank",
+    "--local_rank",
+    dest="local_rank",
+    default=None,
+    type=int,
+    help="Local rank passed by torch.distributed launchers (torchrun). If omitted, will fall back to LOCAL_RANK env var.",
+)
 parser.add_argument(
     "--use-multi-epochs-loader",
     action="store_true",
@@ -973,7 +980,8 @@ def main():
     args.world_size = 1
     args.rank = 0  # global rank
     if args.distributed:
-        args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        if args.local_rank is None:
+            args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         args.device = "cuda:%d" % args.local_rank
         torch.cuda.set_device(args.local_rank)
         # args.device = "cuda:%d" % args.local_rank
@@ -987,6 +995,8 @@ def main():
         )
     else:
         _logger.info("Training with a single process on 1 GPUs.")
+        if args.local_rank is None:
+            args.local_rank = 0
     assert args.rank >= 0
 
     # resolve AMP arguments based on PyTorch / Apex availability

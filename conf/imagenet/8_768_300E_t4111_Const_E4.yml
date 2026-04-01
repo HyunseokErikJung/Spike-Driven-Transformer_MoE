@@ -4,13 +4,13 @@ amp: true
 # amp: false
 
 # dataset parameters
-batch_size: 64
+batch_size: 64 #128or256 on paper
 val_batch_size: 64
 data_dir: /dataset/ILSVRC2012
 
 # training parameters
 epochs: 300
-lr: 0.001
+lr: 5e-4 #5e-4 on paper
 min_lr: 2.0e-05
 warmup_epochs: 20
 warmup_lr: 1.0e-05
@@ -24,10 +24,11 @@ layer: 8
 dim: 768
 # mlp-ratio: 4
 # mlp_ratio: 4
-mlp_ratio: 2.0
-num_experts: 2
-expert_timesteps: [4, 1] #"--expert-timesteps",
+mlp_ratio: 1.0
+num_experts: 4
+expert_timesteps: [4, 1, 1, 1] #"--expert-timesteps",
 only_expert_ids: null
+
 
 
 
